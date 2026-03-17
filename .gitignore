@@ -102,6 +102,9 @@ newrelic_agent.log
 docker/opencode/opencode.jsonc
 .vscode/launch.json
 
+# Local runtime mirror synced from gamification-engine/modules/gamification
+apps/mercato/src/modules/gamification/
+
 # Local npm registry (Verdaccio)
 .npmrc
 !.npmrc.local

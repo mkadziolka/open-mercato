@@ -718,10 +718,10 @@ export async function generateModuleRegistry(options: ModuleRegistryOptions): Pr
           const name = file.replace(/\.ts$/, '')
           const appFile = path.join(wrkApp, ...segs, `${name}.ts`)
           const fromApp = fs.existsSync(appFile)
-          // Use package import path for checking exports (file path fails due to relative imports)
           const importPath = `${fromApp ? appImportBase : imps.pkgBase}/workers/${[...segs, name].join('/')}`
+          const exportCheckPath = fromApp ? appFile : importPath
           // Only include files that export metadata with a queue property
-          if (!(await moduleHasExport(importPath, 'metadata'))) continue
+          if (!(await moduleHasExport(exportCheckPath, 'metadata'))) continue
           const importName = `Worker${importId++}_${toVar(modId)}_${toVar([...segs, name].join('_') || 'index')}`
           const metaName = `WorkerMeta${importId++}_${toVar(modId)}_${toVar([...segs, name].join('_') || 'index')}`
           imports.push(`import ${importName}, * as ${metaName} from '${importPath}'`)
@@ -1405,10 +1405,10 @@ export async function generateModuleRegistryCli(options: ModuleRegistryOptions):
           const name = file.replace(/\.ts$/, '')
           const appFile = path.join(wrkApp, ...segs, `${name}.ts`)
           const fromApp = fs.existsSync(appFile)
-          // Use package import path for checking exports (file path fails due to relative imports)
           const importPath = `${fromApp ? appImportBase : imps.pkgBase}/workers/${[...segs, name].join('/')}`
+          const exportCheckPath = fromApp ? appFile : importPath
           // Only include files that export metadata with a queue property
-          if (!(await moduleHasExport(importPath, 'metadata'))) continue
+          if (!(await moduleHasExport(exportCheckPath, 'metadata'))) continue
           const importName = `Worker${importId++}_${toVar(modId)}_${toVar([...segs, name].join('_') || 'index')}`
           const metaName = `WorkerMeta${importId++}_${toVar(modId)}_${toVar([...segs, name].join('_') || 'index')}`
           imports.push(`import ${importName}, * as ${metaName} from '${importPath}'`)
