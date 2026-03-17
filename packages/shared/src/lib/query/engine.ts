@@ -53,6 +53,15 @@ const candidateClassNames = (rawName: string): string[] => {
   return Array.from(candidates)
 }
 
+type MetadataEntryLike = {
+  tableName?: string
+  className?: string
+  name?: string
+  class?: { name?: string }
+  abstract?: boolean
+  embeddable?: boolean
+}
+
 export function resolveEntityTableName(em: EntityManager | undefined, entity: EntityId): string {
   if (entityTableCache.has(entity)) {
     return entityTableCache.get(entity)!
@@ -60,6 +69,7 @@ export function resolveEntityTableName(em: EntityManager | undefined, entity: En
   const parts = String(entity || '').split(':')
   const rawName = (parts[1] && parts[1].trim().length > 0) ? parts[1] : (parts[0] || '').trim()
   const metadata = (em as any)?.getMetadata?.()
+  const fallback = pluralizeBaseName(rawName || '')
 
   if (metadata && rawName) {
     const candidates = candidateClassNames(rawName)
@@ -73,9 +83,32 @@ export function resolveEntityTableName(em: EntityManager | undefined, entity: En
         }
       } catch {}
     }
+
+    const all = metadata.getAll?.()
+    if (all && typeof all === 'object') {
+      const entries = Object.values(all as Record<string, MetadataEntryLike>).filter((meta) => {
+        return meta && !meta.abstract && !meta.embeddable && typeof meta.tableName === 'string'
+      })
+
+      for (const meta of entries) {
+        const classNames = [meta.className, meta.name, meta.class?.name].filter(Boolean) as string[]
+        if (classNames.some((name) => candidates.some((candidate) => name === candidate || name.endsWith(candidate)))) {
+          const tableName = String(meta.tableName)
+          entityTableCache.set(entity, tableName)
+          return tableName
+        }
+      }
+
+      for (const meta of entries) {
+        const tableName = String(meta.tableName)
+        if (tableName === fallback || tableName.endsWith(`_${fallback}`)) {
+          entityTableCache.set(entity, tableName)
+          return tableName
+        }
+      }
+    }
   }
 
-  const fallback = pluralizeBaseName(rawName || '')
   entityTableCache.set(entity, fallback)
   return fallback
 }
