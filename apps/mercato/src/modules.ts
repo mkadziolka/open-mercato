@@ -6,6 +6,7 @@ export type ModuleEntry = { id: string; from?: '@open-mercato/core' | '@app' | s
 export const enabledModules: ModuleEntry[] = [
   { id: 'dashboards', from: '@open-mercato/core' },
   { id: 'auth', from: '@open-mercato/core' },
+  { id: 'gamification', from: '@app' },
   { id: 'directory', from: '@open-mercato/core' },
   { id: 'customers', from: '@open-mercato/core' },
   { id: 'perspectives', from: '@open-mercato/core' },
