@@ -169,6 +169,7 @@ export function toVar(s: string): string {
 
 export function toSnake(s: string): string {
   return s
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
     .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
     .replace(/\W+/g, '_')
     .replace(/_{2,}/g, '_')

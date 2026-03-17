@@ -17,6 +17,7 @@ import {
 
 type GroupKey = '@app' | '@open-mercato/core' | string
 type EntityFieldMap = Record<string, string[]>
+type ExportedEntityInfo = { className: string; entityKey: string }
 
 export interface EntityIdsOptions {
   resolver: PackageResolver
@@ -27,10 +28,41 @@ export interface EntityIdsOptions {
  * Extract exported class names from a TypeScript source file without dynamic import.
  * This is used for @app modules since Node.js can't import TypeScript files directly.
  */
-function parseExportedClassNamesFromFile(filePath: string): string[] {
+function singularizeSegment(value: string): string {
+  if (value.endsWith('ies')) return `${value.slice(0, -3)}y`
+  if (value.endsWith('ss')) return value
+  if (value.endsWith('ses')) return value.slice(0, -2)
+  if (value.endsWith('s')) return value.slice(0, -1)
+  return value
+}
+
+function entityKeyFromTableName(tableName: string): string {
+  const parts = tableName.split('_')
+  if (parts.length === 0) return tableName
+  const last = parts[parts.length - 1]
+  parts[parts.length - 1] = singularizeSegment(last)
+  return parts.join('_')
+}
+
+function getDecoratorTableNameLiteral(dec: ts.Decorator | undefined): string | undefined {
+  if (!dec) return undefined
+  const expr = dec.expression
+  if (!ts.isCallExpression(expr)) return undefined
+  if (!expr.arguments.length) return undefined
+  const first = expr.arguments[0]
+  if (!ts.isObjectLiteralExpression(first)) return undefined
+  for (const prop of first.properties) {
+    if (ts.isPropertyAssignment(prop) && ts.isIdentifier(prop.name) && prop.name.text === 'tableName') {
+      if (ts.isStringLiteral(prop.initializer)) return prop.initializer.text
+    }
+  }
+  return undefined
+}
+
+function parseExportedEntitiesFromFile(filePath: string): ExportedEntityInfo[] {
   const src = fs.readFileSync(filePath, 'utf8')
   const sf = ts.createSourceFile(filePath, src, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS)
-  const classNames: string[] = []
+  const entities: ExportedEntityInfo[] = []
 
   sf.forEachChild((node) => {
     // Check for exported class declarations
@@ -39,19 +71,31 @@ function parseExportedClassNamesFromFile(filePath: string): string[] {
         (m) => m.kind === ts.SyntaxKind.ExportKeyword
       )
       if (hasExport) {
-        classNames.push(node.name.text)
+        const decorators = ts.canHaveDecorators(node)
+          ? ts.getDecorators(node) ?? []
+          : []
+        const entityDecorator = decorators.find((d) => {
+          const expr = d.expression
+          const callee = ts.isCallExpression(expr) ? expr.expression : expr
+          return ts.isIdentifier(callee) && callee.text === 'Entity'
+        })
+        const tableName = getDecoratorTableNameLiteral(entityDecorator)
+        entities.push({
+          className: node.name.text,
+          entityKey: tableName ? entityKeyFromTableName(tableName) : toSnake(node.name.text),
+        })
       }
     }
   })
 
-  return classNames
+  return entities
 }
 
-function parseEntityFieldsFromFile(filePath: string, exportedClassNames: string[]): EntityFieldMap {
+function parseEntityFieldsFromFile(filePath: string, exportedEntities: ExportedEntityInfo[]): EntityFieldMap {
   const src = fs.readFileSync(filePath, 'utf8')
   const sf = ts.createSourceFile(filePath, src, ts.ScriptTarget.ES2020, true, ts.ScriptKind.TS)
 
-  const exported = new Set(exportedClassNames)
+  const exported = new Map(exportedEntities.map((entry) => [entry.className, entry.entityKey]))
   const result: EntityFieldMap = {}
 
   function getDecoratorArgNameLiteral(dec: ts.Decorator | undefined): string | undefined {
@@ -77,8 +121,8 @@ function parseEntityFieldsFromFile(filePath: string, exportedClassNames: string[
   sf.forEachChild((node) => {
     if (!ts.isClassDeclaration(node) || !node.name) return
     const clsName = node.name.text
-    if (!exported.has(clsName)) return
-    const entityKey = toSnake(clsName)
+    const entityKey = exported.get(clsName)
+    if (!entityKey) return
     const fields: string[] = []
 
     for (const member of node.members) {
@@ -206,13 +250,13 @@ export async function generateEntityIds(options: EntityIdsOptions): Promise<Gene
     }
 
     // Get exported class names - either via dynamic import or TypeScript parsing
-    let exportNames: string[]
+    let exportedEntities: ExportedEntityInfo[]
     const isAppModule = entry.from === '@app'
 
     if (isAppModule && filePath) {
       // For @app modules, parse TypeScript source directly
       // since Node.js can't import TypeScript files (path alias @/ doesn't resolve at runtime)
-      exportNames = parseExportedClassNamesFromFile(filePath)
+      exportedEntities = parseExportedEntitiesFromFile(filePath)
     } else {
       // For package modules, use dynamic import
       let mod: Record<string, unknown>
@@ -227,11 +271,22 @@ export async function generateEntityIds(options: EntityIdsOptions): Promise<Gene
         groupedModulesDict[group][modId] = modId
         continue
       }
-      exportNames = Object.keys(mod).filter((k) => typeof mod[k] === 'function')
+      exportedEntities = Object.keys(mod)
+        .filter((k) => typeof mod[k] === 'function')
+        .map((className) => {
+          const exportedValue = mod[className] as { prototype?: { __meta?: { tableName?: string } } }
+          const tableName = exportedValue?.prototype?.__meta?.tableName
+          return {
+            className,
+            entityKey: typeof tableName === 'string' && tableName.length > 0
+              ? entityKeyFromTableName(tableName)
+              : toSnake(className),
+          }
+        })
     }
 
-    const entityNames = exportNames
-      .map((k) => toSnake(k))
+    const entityNames = exportedEntities
+      .map((entry) => entry.entityKey)
       .filter((k, idx, arr) => arr.indexOf(k) === idx)
 
     // Build dictionaries
@@ -249,8 +304,7 @@ export async function generateEntityIds(options: EntityIdsOptions): Promise<Gene
     }
 
     if (filePath) {
-      // exportNames already contains only class/function names from either source
-      const entityFieldMap = parseEntityFieldsFromFile(filePath, exportNames)
+      const entityFieldMap = parseEntityFieldsFromFile(filePath, exportedEntities)
       fieldsByGroup[group] = fieldsByGroup[group] || {}
       fieldsByGroup[group][modId] = entityFieldMap
     }
