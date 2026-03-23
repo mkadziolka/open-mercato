@@ -267,7 +267,14 @@ export default function LoginPage() {
     <div className="min-h-svh flex items-center justify-center p-4">
       <Card className="w-full max-w-sm">
         <CardHeader className="flex flex-col items-center gap-4 text-center p-10">
-          <Image alt={translate('auth.login.logoAlt', 'District Gaming Engine logo')} src="/brand/districtlogowhite.svg" width={150} height={150} priority />
+          <Image
+            alt={translate('auth.login.logoAlt', 'District Gaming Engine logo')}
+            src="/brand/districtlogowhite.svg"
+            width={280}
+            height={70}
+            priority
+            className="h-14 w-auto brightness-0 dark:invert"
+          />
           <h1 className="text-2xl font-semibold">{translate('auth.login.brandName', 'Gaming Engine')}</h1>
           <CardDescription>{translate('auth.login.subtitle', 'Access your workspace')}</CardDescription>
         </CardHeader>

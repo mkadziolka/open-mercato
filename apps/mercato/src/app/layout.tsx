@@ -19,8 +19,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: 'Open Mercato',
-  description: 'AI-supportive, modular ERP foundation for product & service companies',
+  title: 'District Gamification Engine',
+  description: 'District Gamification Engine',
   icons: {
     icon: '/favicon.ico',
     shortcut: '/favicon.ico',

@@ -4,11 +4,8 @@ import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 export async function resolveLocalizedAppMetadata(): Promise<Metadata> {
   const { t } = await resolveTranslations()
   return {
-    title: t('app.metadata.title', 'Open Mercato'),
-    description: t(
-      'app.metadata.description',
-      'AI-supportive, modular ERP foundation for product & service companies',
-    ),
+    title: t('app.metadata.title', 'District Gamification Engine'),
+    description: t('app.metadata.description', 'District Gamification Engine'),
   }
 }
 
