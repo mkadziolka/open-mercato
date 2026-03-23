@@ -174,6 +174,7 @@ function mergeSidebarGroupsWithInjected(
   if (injectedItems.length === 0) return groups
 
   const injectedByGroup = new Map<string, InjectionMenuItem[]>()
+  const injectedGroupOrder = new Map<string, number>()
   const ungrouped: InjectionMenuItem[] = []
 
   for (const item of injectedItems) {
@@ -181,6 +182,12 @@ function mergeSidebarGroupsWithInjected(
       const groupItems = injectedByGroup.get(item.groupId) ?? []
       groupItems.push(item)
       injectedByGroup.set(item.groupId, groupItems)
+      if (typeof item.groupOrder === 'number' && Number.isFinite(item.groupOrder)) {
+        const currentOrder = injectedGroupOrder.get(item.groupId)
+        if (currentOrder === undefined || item.groupOrder < currentOrder) {
+          injectedGroupOrder.set(item.groupId, item.groupOrder)
+        }
+      }
       continue
     }
     ungrouped.push(item)
@@ -216,6 +223,21 @@ function mergeSidebarGroupsWithInjected(
   }
 
   return nextGroups
+    .map((group, index) => ({
+      group,
+      index,
+      order: injectedGroupOrder.get(group.id || resolveGroupKey(group)),
+    }))
+    .sort((a, b) => {
+      const ao = a.order
+      const bo = b.order
+      if (ao === undefined && bo === undefined) return a.index - b.index
+      if (ao === undefined) return 1
+      if (bo === undefined) return -1
+      if (ao !== bo) return ao - bo
+      return a.index - b.index
+    })
+    .map((entry) => entry.group)
 }
 
 function mergeSectionGroupsWithInjected(
