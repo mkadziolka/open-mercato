@@ -258,7 +258,6 @@ export async function generateEntityIds(options: EntityIdsOptions): Promise<Gene
 
     // Get exported class names - either via dynamic import or TypeScript parsing
     let exportedEntities: ExportedEntityInfo[]
-    const isAppModule = entry.from === '@app'
 
     if (isAppModule && filePath) {
       // For @app modules, parse TypeScript source directly

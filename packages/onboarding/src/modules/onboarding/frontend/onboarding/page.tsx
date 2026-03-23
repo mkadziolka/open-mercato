@@ -145,7 +145,7 @@ export default function OnboardingPage() {
       <Card className="w-full max-w-lg shadow-lg">
         <CardHeader className="flex flex-col gap-4 p-10 text-center">
           <div className="flex flex-col items-center gap-3">
-            <Image alt="Open Mercato" src="/open-mercato.svg" width={120} height={120} priority />
+            <Image alt="Open Mercato" src="/brand/districtlogowhite.svg" width={120} height={120} priority />
             <CardTitle className="text-2xl font-semibold">
               {translate('onboarding.title', 'Create your Open Mercato workspace')}
             </CardTitle>

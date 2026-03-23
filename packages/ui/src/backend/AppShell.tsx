@@ -895,7 +895,7 @@ export function AppShell({ productName, email, groups, rightHeaderSlot, children
         {!hideHeader && (
           <div className={`flex items-center ${compact ? 'justify-center' : 'justify-between'} mb-2`}>
             <Link href="/backend" className="flex items-center gap-2" aria-label={t('appShell.goToDashboard')}>
-              <Image src="/open-mercato.svg" alt={resolvedProductName} width={32} height={32} className="rounded m-4" />
+              <Image src="/brand/districtlogowhite.svg" alt={resolvedProductName} width={32} height={32} className="rounded m-4" />
               {!compact && <div className="text-m font-semibold">{resolvedProductName}</div>}
             </Link>
           </div>
@@ -1218,7 +1218,7 @@ export function AppShell({ productName, email, groups, rightHeaderSlot, children
         {!hideHeader && (
           <div className={`flex items-center ${compact ? 'justify-center' : 'justify-between'} mb-2`}>
             <Link href="/backend" className="flex items-center gap-2" aria-label={t('appShell.goToDashboard')}>
-              <Image src="/open-mercato.svg" alt={resolvedProductName} width={32} height={32} className="rounded m-4" />
+              <Image src="/brand/districtlogowhite.svg" alt={resolvedProductName} width={32} height={32} className="rounded m-4" />
               {!compact && <div className="text-m font-semibold">{resolvedProductName}</div>}
             </Link>
           </div>
@@ -1589,7 +1589,7 @@ export function AppShell({ productName, email, groups, rightHeaderSlot, children
           <aside className="absolute left-0 top-0 flex h-full w-[260px] flex-col bg-background border-r overflow-hidden">
             <div className="shrink-0 p-3 pb-2 flex items-center justify-between border-b">
               <Link href="/backend" className="flex items-center gap-2 text-sm font-semibold" onClick={() => setMobileOpen(false)} aria-label={t('appShell.goToDashboard')}>
-                <Image src="/open-mercato.svg" alt={resolvedProductName} width={28} height={28} className="rounded" />
+                <Image src="/brand/districtlogowhite.svg" alt={resolvedProductName} width={28} height={28} className="rounded" />
                 {resolvedProductName}
               </Link>
               <IconButton variant="outline" size="sm" onClick={() => setMobileOpen(false)} aria-label={t('appShell.closeMenu')}>✕</IconButton>

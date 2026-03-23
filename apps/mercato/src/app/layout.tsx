@@ -22,7 +22,9 @@ export const metadata: Metadata = {
   title: 'Open Mercato',
   description: 'AI-supportive, modular ERP foundation for product & service companies',
   icons: {
-    icon: '/open-mercato.svg',
+    icon: '/favicon.ico',
+    shortcut: '/favicon.ico',
+    apple: '/brand/apple-touch-icon.png',
   },
 }
 
