@@ -12,6 +12,7 @@ export const enabledModules: ModuleEntry[] = [
   { id: 'gamification', from: '@app' },
   { id: 'directory', from: '@open-mercato/core' },
   { id: 'entities', from: '@open-mercato/core' },
+  { id: 'translations', from: '@open-mercato/core' },
   { id: 'configs', from: '@open-mercato/core' },
   { id: 'attachments', from: '@open-mercato/core' },
   { id: 'messages', from: '@open-mercato/core' },
