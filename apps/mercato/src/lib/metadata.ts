@@ -15,7 +15,7 @@ export async function resolveLocalizedTitleMetadata(input: {
   fallback?: string
 }): Promise<Metadata> {
   const { t } = await resolveTranslations()
-  const fallbackTitle = input.title || input.fallback || 'Open Mercato'
+  const fallbackTitle = input.title || input.fallback || 'District Gamification Engine'
   return {
     title: input.titleKey ? t(input.titleKey, fallbackTitle) : fallbackTitle,
   }
