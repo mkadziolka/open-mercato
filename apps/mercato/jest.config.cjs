@@ -34,7 +34,7 @@ module.exports = {
       },
     ],
   },
-  setupFiles: ['<rootDir>/../../jest.setup.ts'],
+  setupFiles: ['<rootDir>/jest.load-env.cjs', '<rootDir>/../../jest.setup.ts'],
   setupFilesAfterEnv: ['<rootDir>/../../jest.dom.setup.ts'],
   testMatch: ['<rootDir>/src/**/__tests__/**/*.test.(ts|tsx)'],
   passWithNoTests: true,
