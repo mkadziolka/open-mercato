@@ -21,7 +21,13 @@ async function compileAndImport(tsPath: string): Promise<Record<string, unknown>
     throw new Error(`Generated file not found: ${tsPath}`)
   }
 
-  const needsCompile = !jsExists ||
+  // In development/CLI workflows, generated entry files often stay unchanged while
+  // their imported module sources under src/modules/ evolve. Reusing the cached
+  // bundled .mjs would then serve stale DI registrations, workers, or subscribers.
+  // Rebuild eagerly outside production so runtime code matches current source.
+  const forceRecompile = process.env.NODE_ENV !== 'production'
+  const needsCompile = forceRecompile ||
+    !jsExists ||
     fs.statSync(tsPath).mtimeMs > fs.statSync(jsPath).mtimeMs
 
   if (needsCompile) {
