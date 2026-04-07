@@ -6,7 +6,7 @@
   "scripts": {
     "sync:gamification": "node ../../../scripts/sync-gamification.mjs",
     "dev": "mercato server dev",
-    "build": "yarn sync:gamification && next build",
+    "build": "yarn sync:gamification && NODE_ENV=production next build",
     "start": "NODE_OPTIONS='-r newrelic' mercato server start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",

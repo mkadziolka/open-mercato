@@ -182,9 +182,11 @@ export function createLocalQueue<T = unknown>(
       }
     }
 
-    // Remove processed jobs from queue (matching async removeOnComplete behavior)
+    // Remove processed jobs from the latest queue snapshot so jobs enqueued during
+    // handler execution are preserved instead of being clobbered by a stale write.
     if (jobIdsToRemove.size > 0) {
-      const updatedJobs = jobs.filter((j) => !jobIdsToRemove.has(j.id))
+      const currentJobs = readQueue()
+      const updatedJobs = currentJobs.filter((j) => !jobIdsToRemove.has(j.id))
       writeQueue(updatedJobs)
 
       // Update state with running counts

@@ -87,6 +87,55 @@ async function runModuleCommand(
   await cmd.run(args)
 }
 
+function hasArg(args: string[], name: string): boolean {
+  return args.includes(name)
+}
+
+function readOptionValues(args: string[], name: string): string[] {
+  const values: string[] = []
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index]
+    if (arg === name) {
+      const next = args[index + 1]
+      if (next && !next.startsWith('-')) {
+        values.push(next)
+      }
+      continue
+    }
+    if (arg.startsWith(`${name}=`)) {
+      values.push(arg.slice(name.length + 1))
+    }
+  }
+  return values
+}
+
+function readOptionValue(args: string[], name: string): string | undefined {
+  return readOptionValues(args, name).at(-1)
+}
+
+function parsePositiveInteger(rawValue: string | undefined, flagName: string): number | undefined {
+  if (rawValue == null || rawValue === '') return undefined
+  const parsed = Number.parseInt(rawValue, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Expected ${flagName} to be a positive integer, received "${rawValue}"`)
+  }
+  return parsed
+}
+
+async function createQueueFromEnv(queueName: string) {
+  const strategyEnv = process.env.QUEUE_STRATEGY || 'local'
+  const { createQueue } = await import('@open-mercato/queue')
+  if (strategyEnv === 'async') {
+    return createQueue(queueName, 'async', {
+      connection: { url: getRedisUrl('QUEUE') },
+    })
+  }
+
+  return createQueue(queueName, 'local', {
+    baseDir: process.env.QUEUE_BASE_DIR,
+  })
+}
+
 // Build all CLI modules (registered + built-in)
 async function buildAllModules(): Promise<Module[]> {
   const modules = getCliModules()
@@ -790,14 +839,7 @@ export async function run(argv = process.argv) {
             return
           }
 
-          const strategyEnv = process.env.QUEUE_STRATEGY || 'local'
-          const { createQueue } = await import('@open-mercato/queue')
-
-          const queue = strategyEnv === 'async'
-            ? createQueue(queueName, 'async', {
-                connection: { url: getRedisUrl('QUEUE') },
-              })
-            : createQueue(queueName, 'local')
+          const queue = await createQueueFromEnv(queueName)
 
           const res = await queue.clear()
           await queue.close()
@@ -813,14 +855,7 @@ export async function run(argv = process.argv) {
             return
           }
 
-          const strategyEnv = process.env.QUEUE_STRATEGY || 'local'
-          const { createQueue } = await import('@open-mercato/queue')
-
-          const queue = strategyEnv === 'async'
-            ? createQueue(queueName, 'async', {
-                connection: { url: getRedisUrl('QUEUE') },
-              })
-            : createQueue(queueName, 'local')
+          const queue = await createQueueFromEnv(queueName)
 
           const counts = await queue.getJobCounts()
           console.log(`Queue "${queueName}" status:`)
@@ -833,6 +868,127 @@ export async function run(argv = process.argv) {
       },
     ],
   } as any)
+
+  const gamificationCli = [
+    {
+      command: 'requeue-events',
+      run: async (args: string[]) => {
+        const sourceCode = readOptionValue(args, '--source')
+        const eventTypeCode = readOptionValue(args, '--event-type')
+        const limit = parsePositiveInteger(readOptionValue(args, '--limit'), '--limit')
+        const dryRun = hasArg(args, '--dry-run')
+        const includeProcessed = hasArg(args, '--include-processed')
+        const allowAll = hasArg(args, '--all')
+        const eventIds = readOptionValues(args, '--event-id')
+          .flatMap((value) => value.split(','))
+          .map((value) => value.trim())
+          .filter(Boolean)
+        const pendingOnly = !includeProcessed
+
+        if (!allowAll && !sourceCode && !eventTypeCode && eventIds.length === 0) {
+          console.error('Usage: mercato gamification requeue-events (--source <code> | --event-type <code> | --event-id <uuid> | --all) [--pending-only] [--include-processed] [--limit <n>] [--dry-run]')
+          console.error('Example: mercato gamification requeue-events --source activity --pending-only')
+          console.error('Example: mercato gamification requeue-events --event-id 11111111-1111-1111-1111-111111111111')
+          return
+        }
+
+        const container = await createRequestContainer()
+        const em = container.resolve('em') as any
+
+        const where: string[] = ['1 = 1']
+        const params: unknown[] = []
+
+        if (pendingOnly) {
+          where.push('coalesce(e.is_processed, false) = false')
+        }
+
+        if (sourceCode) {
+          where.push('s.code = ?')
+          params.push(sourceCode)
+        }
+
+        if (eventTypeCode) {
+          where.push('et.code = ?')
+          params.push(eventTypeCode)
+        }
+
+        if (eventIds.length > 0) {
+          where.push(`e.id in (${eventIds.map(() => '?').join(', ')})`)
+          params.push(...eventIds)
+        }
+
+        const limitClause = limit != null ? ' limit ?' : ''
+        if (limit != null) {
+          params.push(limit)
+        }
+
+        const rows = await em.getConnection().execute<Array<{
+          id: string
+          is_processed: boolean
+          external_id: string | null
+          source_code: string
+          event_type_code: string
+        }>>(
+          `
+            select
+              e.id,
+              e.is_processed,
+              e.external_id,
+              s.code as source_code,
+              et.code as event_type_code
+            from gf_events e
+            join gf_event_sources s on s.id = e.source_id
+            join gf_event_types et on et.id = e.event_type_id
+            where ${where.join(' and ')}
+            order by e.created_at asc
+            ${limitClause}
+          `,
+          params,
+        )
+
+        if (!Array.isArray(rows) || rows.length === 0) {
+          console.log('No gamification events matched the provided filters.')
+          return
+        }
+
+        console.log(`Matched ${rows.length} gamification event(s):`)
+        for (const row of rows) {
+          console.log(`  ${row.id} source=${row.source_code} eventType=${row.event_type_code} processed=${row.is_processed ? 'yes' : 'no'} externalId=${row.external_id ?? '-'}`)
+        }
+
+        if (dryRun) {
+          console.log('Dry run only, no jobs were enqueued.')
+          return
+        }
+
+        const queue = await createQueueFromEnv('gamification:event-process')
+        const traceId = `gamification-requeue-${Date.now()}`
+
+        try {
+          for (const row of rows) {
+            const jobId = await queue.enqueue({
+              eventId: row.id,
+              traceId,
+            })
+            console.log(`  enqueued event=${row.id} job=${jobId}`)
+          }
+        } finally {
+          await queue.close()
+        }
+
+        console.log(`Re-enqueued ${rows.length} gamification event(s) to "gamification:event-process".`)
+      },
+    },
+  ]
+  const existingGamificationModule = all.find((mod) => mod.id === 'gamification')
+  if (existingGamificationModule) {
+    existingGamificationModule.cli = [...(existingGamificationModule.cli ?? []), ...gamificationCli]
+  } else {
+    all.push({
+      id: 'gamification',
+      cli: gamificationCli,
+    } as any)
+  }
 
   // Built-in CLI module: events
   all.push({

@@ -9,15 +9,22 @@ function readJson(p: string) { return JSON.parse(fs.readFileSync(p, 'utf8')) }
 
 describe('Queue - local strategy', () => {
   const origCwd = process.cwd()
+  const origQueueBaseDir = process.env.QUEUE_BASE_DIR
   let tmp: string
 
   beforeEach(() => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'queue-test-'))
     process.chdir(tmp)
+    delete process.env.QUEUE_BASE_DIR
   })
 
   afterEach(() => {
     process.chdir(origCwd)
+    if (origQueueBaseDir == null) {
+      delete process.env.QUEUE_BASE_DIR
+    } else {
+      process.env.QUEUE_BASE_DIR = origQueueBaseDir
+    }
     try { fs.rmSync(tmp, { recursive: true, force: true }) } catch {}
   })
 
@@ -167,6 +174,32 @@ describe('Queue - local strategy', () => {
 
     expect(result!.processed).toBe(2)
     expect(result!.failed).toBe(1)
+
+    await queue.close()
+  })
+
+  test('jobs enqueued during processing are preserved in queue', async () => {
+    const queue = createQueue<{ value: number }>('test-queue', 'local')
+    const queuePath = path.join('.mercato', 'queue', 'test-queue', 'queue.json')
+
+    await queue.enqueue({ value: 1 })
+
+    const result = await queue.process(async (job) => {
+      if (job.payload.value === 1) {
+        await queue.enqueue({ value: 2 })
+      }
+    }, { limit: 10 })
+
+    expect(result!.processed).toBe(1)
+    expect(result!.failed).toBe(0)
+
+    const jobs = readJson(queuePath)
+    expect(jobs).toHaveLength(1)
+    expect(jobs[0].payload).toEqual({ value: 2 })
+
+    const counts = await queue.getJobCounts()
+    expect(counts.waiting).toBe(1)
+    expect(counts.completed).toBe(1)
 
     await queue.close()
   })

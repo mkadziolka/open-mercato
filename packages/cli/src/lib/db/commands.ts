@@ -1,5 +1,6 @@
 import path from 'node:path'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { MikroORM, type Logger } from '@mikro-orm/core'
 import { Migrator } from '@mikro-orm/migrations'
@@ -89,8 +90,75 @@ export function makeConstraintDropsIdempotent(sql: string): string {
 }
 
 let tsxLoaderRegistered = false
+const require = createRequire(import.meta.url)
+
+function findNearestTsconfig(startPath: string): string | null {
+  let current = path.dirname(startPath)
+
+  while (true) {
+    const tsconfigPath = path.join(current, 'tsconfig.json')
+    if (fs.existsSync(tsconfigPath)) {
+      return tsconfigPath
+    }
+
+    const parent = path.dirname(current)
+    if (parent === current) {
+      return null
+    }
+    current = parent
+  }
+}
+
+function loadCompilerOptions(projectPath: string): Record<string, unknown> {
+  const ts = require('typescript') as typeof import('typescript')
+  const configFile = ts.readConfigFile(projectPath, ts.sys.readFile)
+  if (configFile.error) {
+    return {}
+  }
+
+  const parsed = ts.parseJsonConfigFileContent(
+    configFile.config,
+    ts.sys,
+    path.dirname(projectPath),
+  )
+
+  return parsed.options as Record<string, unknown>
+}
 
 async function importWithTypeScriptFile(filePath: string): Promise<any> {
+  const projectPath = findNearestTsconfig(filePath)
+  if (projectPath) {
+    const ts = require('typescript') as typeof import('typescript')
+    const source = fs.readFileSync(filePath, 'utf8')
+    const compilerOptions = loadCompilerOptions(projectPath)
+    const transpiled = ts.transpileModule(source, {
+      compilerOptions: {
+        ...compilerOptions,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.NodeNext,
+        sourceMap: false,
+        inlineSourceMap: false,
+        inlineSources: false,
+      },
+      fileName: filePath,
+      reportDiagnostics: false,
+    })
+
+    const tempPath = path.join(
+      path.dirname(filePath),
+      `.cursor-db-import-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`,
+    )
+
+    fs.writeFileSync(tempPath, transpiled.outputText, 'utf8')
+    try {
+      return await import(pathToFileURL(tempPath).href)
+    } finally {
+      try {
+        fs.unlinkSync(tempPath)
+      } catch {}
+    }
+  }
+
   const fileUrl = pathToFileURL(filePath).href
   let tsImportFn: ((fileUrl: string, cwd: string) => Promise<any>) | undefined
   try {
@@ -109,6 +177,24 @@ async function importWithTypeScriptFile(filePath: string): Promise<any> {
   }
 
   return import(fileUrl)
+}
+
+function resolveMirroredSourceModuleBase(entry: ModuleEntry, resolver: PackageResolver): string | null {
+  if (entry.from !== '@app') return null
+
+  const { appBase } = resolver.getModulePaths(entry)
+  const markerPath = path.join(appBase, 'SYNC-MIRROR.md')
+  if (!fs.existsSync(markerPath)) {
+    return null
+  }
+
+  const repoRootCandidate = path.resolve(appBase, '..', '..', '..', '..', '..', '..')
+  const sourceBase = path.join(repoRootCandidate, 'modules', entry.id)
+  if (!fs.existsSync(sourceBase)) {
+    return null
+  }
+
+  return sourceBase
 }
 
 async function loadModuleEntities(entry: ModuleEntry, resolver: PackageResolver): Promise<any[]> {
@@ -154,8 +240,12 @@ async function loadModuleEntities(entry: ModuleEntry, resolver: PackageResolver)
 
 function getMigrationsPath(entry: ModuleEntry, resolver: PackageResolver): string {
   const roots = resolver.getModulePaths(entry)
+  const mirroredSourceBase = resolveMirroredSourceModuleBase(entry, resolver)
 
   if (entry.from === '@app') {
+    if (mirroredSourceBase) {
+      return path.join(mirroredSourceBase, 'migrations').replace(/\\/g, '/')
+    }
     // @app modules: use src/ (user's TypeScript source)
     // Normalize to forward slashes for ESM compatibility on Windows
     return path.join(roots.appBase, 'migrations').replace(/\\/g, '/')
@@ -238,7 +328,9 @@ export async function dbGenerate(resolver: PackageResolver, options: DbOptions =
     const diff = await migrator.createMigration()
     if (diff && diff.fileName) {
       try {
-        const orig = diff.fileName
+        const orig = path.isAbsolute(diff.fileName)
+          ? diff.fileName
+          : path.join(migrationsPath, diff.fileName)
         const base = path.basename(orig)
         const dir = path.dirname(orig)
         const ext = path.extname(base)
