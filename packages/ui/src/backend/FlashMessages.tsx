@@ -4,12 +4,13 @@ import { X } from 'lucide-react'
 import { IconButton } from '../primitives/icon-button'
 
 export type FlashKind = 'success' | 'error' | 'warning' | 'info'
+type FlashOptions = { durationMs?: number }
 
 // Programmatic API to show a flash message without navigation.
 // Consumers can import { flash } and call flash('text', 'error').
-export function flash(message: string, type: FlashKind = 'info') {
+export function flash(message: string, type: FlashKind = 'info', options?: FlashOptions) {
   if (typeof window === 'undefined') return
-  const evt = new CustomEvent('flash', { detail: { message, type } })
+  const evt = new CustomEvent('flash', { detail: { message, type, durationMs: options?.durationMs } })
   window.dispatchEvent(evt)
 }
 
@@ -89,6 +90,17 @@ function FlashMessagesInner() {
   const [msg, setMsg] = React.useState<string | null>(null)
   const [kind, setKind] = React.useState<FlashKind>('info')
   const locationKey = useLocationKey()
+  const dismissTimerRef = React.useRef<number | null>(null)
+
+  const scheduleDismiss = React.useCallback((durationMs = 3000) => {
+    if (dismissTimerRef.current !== null) {
+      window.clearTimeout(dismissTimerRef.current)
+    }
+    dismissTimerRef.current = window.setTimeout(() => {
+      dismissTimerRef.current = null
+      setMsg(null)
+    }, durationMs)
+  }, [])
 
   // Read flash from URL on any navigation change (client-side too)
   React.useEffect(() => {
@@ -102,26 +114,30 @@ function FlashMessagesInner() {
       url.searchParams.delete('flash')
       url.searchParams.delete('type')
       window.history.replaceState({}, '', url.toString())
-      const timer = setTimeout(() => setMsg(null), 3000)
-      return () => clearTimeout(timer)
+      scheduleDismiss()
     }
-  }, [locationKey])
+  }, [locationKey, scheduleDismiss])
 
   // Listen for programmatic flash events
   React.useEffect(() => {
     const handler = (e: Event) => {
-      const ce = e as CustomEvent<{ message?: string; type?: FlashKind }>
+      const ce = e as CustomEvent<{ message?: string; type?: FlashKind; durationMs?: number }>
       const text = ce.detail?.message
       const t = ce.detail?.type || 'info'
+      const durationMs = typeof ce.detail?.durationMs === 'number' ? ce.detail.durationMs : undefined
       if (!text) return
       setMsg(text)
       setKind(t)
-      const timer = setTimeout(() => setMsg(null), 3000)
-      return () => clearTimeout(timer)
+      scheduleDismiss(durationMs)
     }
     window.addEventListener('flash', handler as EventListener)
-    return () => window.removeEventListener('flash', handler as EventListener)
-  }, [])
+    return () => {
+      window.removeEventListener('flash', handler as EventListener)
+      if (dismissTimerRef.current !== null) {
+        window.clearTimeout(dismissTimerRef.current)
+      }
+    }
+  }, [scheduleDismiss])
 
   if (!msg) return null
 
@@ -137,7 +153,13 @@ function FlashMessagesInner() {
             variant="ghost"
             size="sm"
             className="text-white/90 hover:text-white hover:bg-white/10"
-            onClick={() => setMsg(null)}
+            onClick={() => {
+              if (dismissTimerRef.current !== null) {
+                window.clearTimeout(dismissTimerRef.current)
+                dismissTimerRef.current = null
+              }
+              setMsg(null)
+            }}
             aria-label="Dismiss"
           >
             <X size={16} />
