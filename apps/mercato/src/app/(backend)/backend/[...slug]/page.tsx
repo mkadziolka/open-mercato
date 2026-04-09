@@ -63,25 +63,39 @@ export default async function BackendCatchAll(props: BackendParams) {
     }
     const features = match.route.requireFeatures
     if (features && features.length) {
-      const container = await createRequestContainer()
-      const rbac = container.resolve('rbacService') as RbacService
-      let organizationIdForCheck: string | null = auth.orgId ?? null
-      const cookieStore = await cookies()
-      const cookieSelected = cookieStore.get('om_selected_org')?.value ?? null
-      let tenantIdForCheck: string | null = auth.tenantId ?? null
+      let container: Awaited<ReturnType<typeof createRequestContainer>> | null = null
       try {
-        const { organizationId, allowedOrganizationIds, scope } = await resolveFeatureCheckContext({ container, auth, selectedId: cookieSelected })
-        organizationIdForCheck = organizationId
-        tenantIdForCheck = scope.tenantId ?? auth.tenantId ?? null
-        if (Array.isArray(allowedOrganizationIds) && allowedOrganizationIds.length === 0) {
-          return renderAccessDenied()
+        container = await createRequestContainer()
+        const rbac = container.resolve('rbacService') as RbacService
+        let organizationIdForCheck: string | null = auth.orgId ?? null
+        const cookieStore = await cookies()
+        const cookieSelected = cookieStore.get('om_selected_org')?.value ?? null
+        let tenantIdForCheck: string | null = auth.tenantId ?? null
+        try {
+          const { organizationId, allowedOrganizationIds, scope } = await resolveFeatureCheckContext({ container, auth, selectedId: cookieSelected })
+          organizationIdForCheck = organizationId
+          tenantIdForCheck = scope.tenantId ?? auth.tenantId ?? null
+          if (Array.isArray(allowedOrganizationIds) && allowedOrganizationIds.length === 0) {
+            return renderAccessDenied()
+          }
+        } catch {
+          organizationIdForCheck = auth.orgId ?? null
+          tenantIdForCheck = auth.tenantId ?? null
         }
-      } catch {
-        organizationIdForCheck = auth.orgId ?? null
-        tenantIdForCheck = auth.tenantId ?? null
+        const acl = await rbac.loadAcl(auth.sub, {
+          tenantId: tenantIdForCheck,
+          organizationId: organizationIdForCheck,
+        })
+        const hasOrganizationAccess =
+          !(acl.organizations && organizationIdForCheck && !acl.organizations.includes(organizationIdForCheck))
+        const ok = acl.isSuperAdmin || (hasOrganizationAccess && rbac.hasAllFeatures(features, acl.features))
+        if (!ok) return renderAccessDenied()
+      } finally {
+        const disposable = container as unknown as { dispose?: () => Promise<void> } | null
+        if (typeof disposable?.dispose === 'function') {
+          await disposable.dispose()
+        }
       }
-      const ok = await rbac.userHasAllFeatures(auth.sub, features, { tenantId: tenantIdForCheck, organizationId: organizationIdForCheck })
-      if (!ok) return renderAccessDenied()
     }
   }
   const pageHandle = ComponentReplacementHandles.page(pathname)

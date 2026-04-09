@@ -3,6 +3,15 @@ import { z } from 'zod'
 import type { OpenApiMethodDoc, OpenApiRouteDoc } from '@open-mercato/shared/lib/openapi'
 import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
 import { getAuthFromRequest } from '@open-mercato/shared/lib/auth/server'
+import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
+
+type FeatureCheckPayload = {
+  ok: boolean
+  granted: string[]
+  userId: string
+}
+
+const featureCheckInflight = new Map<string, Promise<FeatureCheckPayload>>()
 
 export const metadata = {
   POST: { requireAuth: true },
@@ -15,20 +24,41 @@ export async function POST(req: Request) {
   try { body = await req.json() } catch {}
   const features: string[] = Array.isArray(body?.features) ? body.features : []
   if (!features.length) return NextResponse.json({ ok: true, granted: [], userId: auth.sub })
-  const container = await createRequestContainer()
-  const rbac = (container.resolve('rbacService') as any)
-  const ok = await rbac.userHasAllFeatures(auth.sub, features, { tenantId: auth.tenantId, organizationId: auth.orgId })
-  // Return which features the user has (for batch checking)
-  if (ok) {
-    return NextResponse.json({ ok: true, granted: features, userId: auth.sub })
+  const normalizedFeatures = Array.from(new Set(features.filter((feature): feature is string => typeof feature === 'string' && feature.length > 0))).sort()
+  if (!normalizedFeatures.length) return NextResponse.json({ ok: true, granted: [], userId: auth.sub })
+  const cacheKey = JSON.stringify([
+    auth.sub,
+    auth.tenantId ?? null,
+    auth.orgId ?? null,
+    normalizedFeatures,
+  ])
+  const inflight = featureCheckInflight.get(cacheKey)
+  if (inflight) {
+    return NextResponse.json(await inflight)
   }
-  // Check individually to see which features are granted
-  const granted: string[] = []
-  for (const f of features) {
-    const hasFeature = await rbac.userHasAllFeatures(auth.sub, [f], { tenantId: auth.tenantId, organizationId: auth.orgId })
-    if (hasFeature) granted.push(f)
+  let container: Awaited<ReturnType<typeof createRequestContainer>> | null = null
+  const compute = (async (): Promise<FeatureCheckPayload> => {
+    container = await createRequestContainer()
+    const rbac = container.resolve<RbacService>('rbacService')
+    const acl = await rbac.loadAcl(auth.sub, { tenantId: auth.tenantId, organizationId: auth.orgId })
+    const hasOrganizationAccess =
+      !(acl.organizations && auth.orgId && !acl.organizations.includes(auth.orgId))
+    const granted = acl.isSuperAdmin || hasOrganizationAccess
+      ? normalizedFeatures.filter((feature) => acl.isSuperAdmin || rbac.hasAllFeatures([feature], acl.features))
+      : []
+    const ok = granted.length === normalizedFeatures.length
+    return { ok, granted, userId: auth.sub }
+  })()
+  featureCheckInflight.set(cacheKey, compute)
+  try {
+    return NextResponse.json(await compute)
+  } finally {
+    featureCheckInflight.delete(cacheKey)
+    const disposable = container as unknown as { dispose?: () => Promise<void> } | null
+    if (typeof disposable?.dispose === 'function') {
+      await disposable.dispose()
+    }
   }
-  return NextResponse.json({ ok: false, granted, userId: auth.sub })
 }
 
 const featureCheckRequestSchema = z.object({

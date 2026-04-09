@@ -12,6 +12,9 @@ interface AclData {
   organizations: string[] | null
 }
 
+const globalSuperAdminInflight = new Map<string, Promise<boolean>>()
+const aclLoadInflight = new Map<string, Promise<AclData>>()
+
 function isAclData(value: unknown): value is AclData {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Partial<AclData>
@@ -180,36 +183,46 @@ export class RbacService {
 
   private async isGlobalSuperAdmin(userId: string): Promise<boolean> {
     if (this.globalSuperAdminCache.has(userId)) return this.globalSuperAdminCache.get(userId)!
-    const em = this.em.fork()
-    const userSuper = await em.findOne(UserAcl, { user: userId as any, isSuperAdmin: true })
-    if (userSuper && (userSuper as any).isSuperAdmin) {
-      this.globalSuperAdminCache.set(userId, true)
-      return true
+    const inflight = globalSuperAdminInflight.get(userId)
+    if (inflight) return inflight
+    const promise = (async () => {
+      const em = this.em.fork()
+      const userSuper = await em.findOne(UserAcl, { user: userId as any, isSuperAdmin: true })
+      if (userSuper && (userSuper as any).isSuperAdmin) {
+        this.globalSuperAdminCache.set(userId, true)
+        return true
+      }
+      const links = await findWithDecryption(
+        em,
+        UserRole,
+        { user: userId as any },
+        { populate: ['role'] },
+        { tenantId: null, organizationId: null },
+      )
+      const linkList = Array.isArray(links) ? links : []
+      if (!linkList.length) {
+        this.globalSuperAdminCache.set(userId, false)
+        return false
+      }
+      const roleIds = Array.from(new Set(linkList.map((link) => {
+        const role = link.role as any
+        return role?.id ? String(role.id) : null
+      }).filter((id): id is string => typeof id === 'string' && id.length > 0)))
+      if (!roleIds.length) {
+        this.globalSuperAdminCache.set(userId, false)
+        return false
+      }
+      const roleSuper = await em.findOne(RoleAcl, { isSuperAdmin: true, role: { $in: roleIds as any } } as any)
+      const result = !!(roleSuper && (roleSuper as any).isSuperAdmin)
+      this.globalSuperAdminCache.set(userId, result)
+      return result
+    })()
+    globalSuperAdminInflight.set(userId, promise)
+    try {
+      return await promise
+    } finally {
+      globalSuperAdminInflight.delete(userId)
     }
-    const links = await findWithDecryption(
-      em,
-      UserRole,
-      { user: userId as any },
-      { populate: ['role'] },
-      { tenantId: null, organizationId: null },
-    )
-    const linkList = Array.isArray(links) ? links : []
-    if (!linkList.length) {
-      this.globalSuperAdminCache.set(userId, false)
-      return false
-    }
-    const roleIds = Array.from(new Set(linkList.map((link) => {
-      const role = link.role as any
-      return role?.id ? String(role.id) : null
-    }).filter((id): id is string => typeof id === 'string' && id.length > 0)))
-    if (!roleIds.length) {
-      this.globalSuperAdminCache.set(userId, false)
-      return false
-    }
-    const roleSuper = await em.findOne(RoleAcl, { isSuperAdmin: true, role: { $in: roleIds as any } } as any)
-    const result = !!(roleSuper && (roleSuper as any).isSuperAdmin)
-    this.globalSuperAdminCache.set(userId, result)
-    return result
   }
 
   /**
@@ -241,110 +254,119 @@ export class RbacService {
     const cacheKey = this.getCacheKey(userId, scope)
     const cached = await this.getFromCache(cacheKey)
     if (cached) return cached
+    const inflight = aclLoadInflight.get(cacheKey)
+    if (inflight) return inflight
+    const promise = (async (): Promise<AclData> => {
+      if (!userId.startsWith('api_key:')) {
+        if (await this.isGlobalSuperAdmin(userId)) {
+          const result = { isSuperAdmin: true, features: ['*'], organizations: null }
+          await this.setCache(cacheKey, result, userId, scope)
+          return result
+        }
+      }
 
-    if (!userId.startsWith('api_key:')) {
-      if (await this.isGlobalSuperAdmin(userId)) {
-        const result = { isSuperAdmin: true, features: ['*'], organizations: null }
+      if (userId.startsWith('api_key:')) {
+        const apiKeyId = userId.slice('api_key:'.length)
+        const em = this.em.fork()
+        const key = await em.findOne(ApiKey, { id: apiKeyId, deletedAt: null })
+        if (!key || (key.expiresAt && key.expiresAt.getTime() < Date.now())) {
+          const result = { isSuperAdmin: false, features: [], organizations: null }
+          await this.setCache(cacheKey, result, userId, scope)
+          return result
+        }
+        const tenantId = scope.tenantId || key.tenantId || null
+        const roleIds = Array.isArray(key.rolesJson) ? key.rolesJson.filter(Boolean) : []
+        let isSuper = false
+        const features: string[] = []
+        let organizations: string[] | null = key.organizationId ? [key.organizationId] : null
+        if (tenantId && roleIds.length) {
+          const racls = await em.find(RoleAcl, { tenantId, role: { $in: roleIds as any } } as any)
+          for (const acl of racls) {
+            isSuper = isSuper || !!acl.isSuperAdmin
+            if (Array.isArray(acl.featuresJson)) {
+              for (const f of acl.featuresJson) if (!features.includes(f)) features.push(f)
+            }
+            if (organizations !== null) {
+              if (acl.organizationsJson == null) {
+                organizations = null
+              } else {
+                organizations = Array.from(new Set([...(organizations || []), ...acl.organizationsJson]))
+              }
+            }
+          }
+        }
+        const result = { isSuperAdmin: isSuper, features, organizations }
         await this.setCache(cacheKey, result, userId, scope)
         return result
       }
-    }
 
-    if (userId.startsWith('api_key:')) {
-      const apiKeyId = userId.slice('api_key:'.length)
+      // Use a forked EntityManager to avoid inheriting an aborted transaction from callers
       const em = this.em.fork()
-      const key = await em.findOne(ApiKey, { id: apiKeyId, deletedAt: null })
-      if (!key || (key.expiresAt && key.expiresAt.getTime() < Date.now())) {
+      const user = await em.findOne(User, { id: userId })
+      if (!user) {
         const result = { isSuperAdmin: false, features: [], organizations: null }
         await this.setCache(cacheKey, result, userId, scope)
         return result
       }
-      const tenantId = scope.tenantId || key.tenantId || null
-      const roleIds = Array.isArray(key.rolesJson) ? key.rolesJson.filter(Boolean) : []
+      const tenantId = scope.tenantId || user.tenantId || null
+      const orgId = scope.organizationId || user.organizationId || null
+
+      if (!tenantId) {
+        const result = { isSuperAdmin: false, features: [], organizations: null }
+        await this.setCache(cacheKey, result, userId, scope)
+        return result
+      }
+
+      // Per-user ACL first
+      const uacl = await em.findOne(UserAcl, { user: userId as any, tenantId })
+      if (uacl) {
+        const result = {
+          isSuperAdmin: !!uacl.isSuperAdmin,
+          features: Array.isArray(uacl.featuresJson) ? (uacl.featuresJson as string[]) : [],
+          organizations: Array.isArray(uacl.organizationsJson) ? (uacl.organizationsJson as string[]) : null,
+        }
+        await this.setCache(cacheKey, result, userId, scope)
+        return result
+      }
+
+      // Aggregate role ACLs
+      const links = await findWithDecryption(
+        em,
+        UserRole,
+        { user: userId as any, role: { tenantId } } as any,
+        { populate: ['role'] },
+        { tenantId, organizationId: orgId },
+      )
+      const linkList = Array.isArray(links) ? links : []
+      const roleIds = linkList.map((l) => (l.role as any)?.id).filter(Boolean)
       let isSuper = false
       const features: string[] = []
-      let organizations: string[] | null = key.organizationId ? [key.organizationId] : null
-      if (tenantId && roleIds.length) {
-        const racls = await em.find(RoleAcl, { tenantId, role: { $in: roleIds as any } } as any)
-        for (const acl of racls) {
-          isSuper = isSuper || !!acl.isSuperAdmin
-          if (Array.isArray(acl.featuresJson)) {
-            for (const f of acl.featuresJson) if (!features.includes(f)) features.push(f)
-          }
+      let organizations: string[] | null = []
+      if (roleIds.length) {
+        const racls = await em.find(RoleAcl, { tenantId, role: { $in: roleIds as any } } as any, {})
+        const roleAcls = Array.isArray(racls) ? racls : []
+        for (const r of roleAcls) {
+          isSuper = isSuper || !!r.isSuperAdmin
+          if (Array.isArray(r.featuresJson)) for (const f of r.featuresJson) if (!features.includes(f)) features.push(f)
           if (organizations !== null) {
-            if (acl.organizationsJson == null) {
-              organizations = null
-            } else {
-              organizations = Array.from(new Set([...(organizations || []), ...acl.organizationsJson]))
-            }
+            if (r.organizationsJson == null) organizations = null
+            else organizations = Array.from(new Set([...(organizations || []), ...r.organizationsJson]))
           }
         }
+      }
+      if (organizations && orgId && !organizations.includes(orgId)) {
+        // Out-of-scope org; caller will enforce
       }
       const result = { isSuperAdmin: isSuper, features, organizations }
       await this.setCache(cacheKey, result, userId, scope)
       return result
+    })()
+    aclLoadInflight.set(cacheKey, promise)
+    try {
+      return await promise
+    } finally {
+      aclLoadInflight.delete(cacheKey)
     }
-
-    // Use a forked EntityManager to avoid inheriting an aborted transaction from callers
-    const em = this.em.fork()
-    const user = await em.findOne(User, { id: userId })
-    if (!user) {
-      const result = { isSuperAdmin: false, features: [], organizations: null }
-      await this.setCache(cacheKey, result, userId, scope)
-      return result
-    }
-    const tenantId = scope.tenantId || user.tenantId || null
-    const orgId = scope.organizationId || user.organizationId || null
-
-    if (!tenantId) {
-      const result = { isSuperAdmin: false, features: [], organizations: null }
-      await this.setCache(cacheKey, result, userId, scope)
-      return result
-    }
-
-    // Per-user ACL first
-    const uacl = await em.findOne(UserAcl, { user: userId as any, tenantId })
-    if (uacl) {
-      const result = {
-        isSuperAdmin: !!uacl.isSuperAdmin,
-        features: Array.isArray(uacl.featuresJson) ? (uacl.featuresJson as string[]) : [],
-        organizations: Array.isArray(uacl.organizationsJson) ? (uacl.organizationsJson as string[]) : null,
-      }
-      await this.setCache(cacheKey, result, userId, scope)
-      return result
-    }
-
-    // Aggregate role ACLs
-    const links = await findWithDecryption(
-      em,
-      UserRole,
-      { user: userId as any, role: { tenantId } } as any,
-      { populate: ['role'] },
-      { tenantId, organizationId: orgId },
-    )
-    const linkList = Array.isArray(links) ? links : []
-    const roleIds = linkList.map((l) => (l.role as any)?.id).filter(Boolean)
-    let isSuper = false
-    const features: string[] = []
-    let organizations: string[] | null = []
-    if (roleIds.length) {
-      const racls = await em.find(RoleAcl, { tenantId, role: { $in: roleIds as any } } as any, {})
-      const roleAcls = Array.isArray(racls) ? racls : []
-      for (const r of roleAcls) {
-        isSuper = isSuper || !!r.isSuperAdmin
-        if (Array.isArray(r.featuresJson)) for (const f of r.featuresJson) if (!features.includes(f)) features.push(f)
-        if (organizations !== null) {
-          if (r.organizationsJson == null) organizations = null
-          else organizations = Array.from(new Set([...(organizations || []), ...r.organizationsJson]))
-        }
-      }
-    }
-    if (organizations && orgId && !organizations.includes(orgId)) {
-      // Out-of-scope org; caller will enforce
-    }
-    const result = { isSuperAdmin: isSuper, features, organizations }
-    await this.setCache(cacheKey, result, userId, scope)
-    return result
   }
 
   /**

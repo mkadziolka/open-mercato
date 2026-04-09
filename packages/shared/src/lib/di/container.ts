@@ -45,6 +45,9 @@ export async function createRequestContainer(): Promise<AppContainer> {
   const baseEm = (RequestContext.getEntityManager() as any) ?? orm.em
   const em = baseEm.fork({ clear: true, freshEventManager: true, useContext: true }) as unknown as EntityManager
   const container = createContainer({ injectionMode: InjectionMode.CLASSIC })
+  const originalDispose = typeof (container as any).dispose === 'function'
+    ? (container as any).dispose.bind(container)
+    : null
   // Core registrations
   container.register({
     em: asValue(em),
@@ -94,6 +97,24 @@ export async function createRequestContainer(): Promise<AppContainer> {
     }
   } catch {
     // best-effort; do not block container creation
+  }
+  ;(container as AppContainer & { dispose: () => Promise<void> }).dispose = async () => {
+    try {
+      const cache = container.hasRegistration('cache') ? (container.resolve('cache') as { close?: () => Promise<void> } | null) : null
+      if (typeof cache?.close === 'function') {
+        await cache.close()
+      }
+    } catch {
+      // best-effort
+    }
+    try {
+      em.clear()
+    } catch {
+      // best-effort
+    }
+    if (originalDispose) {
+      await originalDispose()
+    }
   }
   return container
 }

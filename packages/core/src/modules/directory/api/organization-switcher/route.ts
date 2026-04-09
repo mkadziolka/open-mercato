@@ -25,6 +25,17 @@ type OrganizationMenuNode = {
   children: OrganizationMenuNode[]
 }
 
+type OrganizationSwitcherPayload = {
+  items: OrganizationMenuNode[]
+  selectedId: string | null
+  canManage: boolean
+  tenantId?: string | null
+  tenants?: { id: string; name: string; isActive: boolean }[]
+  isSuperAdmin?: boolean
+}
+
+const organizationSwitcherInflight = new Map<string, Promise<OrganizationSwitcherPayload>>()
+
 function buildOrganizationMenu(
   hierarchy: ComputedHierarchy,
   accessible: string[] | null,
@@ -96,14 +107,29 @@ export async function GET(req: NextRequest) {
   }
 
   const url = new URL(req.url)
-
-  try {
-    const container = await createRequestContainer()
+  const rawSelected = getSelectedOrganizationFromRequest(req)
+  const rawCookieTenant = getSelectedTenantFromRequest(req)
+  const cacheKey = JSON.stringify([
+    auth.sub,
+    auth.tenantId ?? null,
+    auth.orgId ?? null,
+    auth.isSuperAdmin === true,
+    url.searchParams.get('tenantId'),
+    rawCookieTenant,
+    rawSelected,
+  ])
+  const inflight = organizationSwitcherInflight.get(cacheKey)
+  if (inflight) {
+    return NextResponse.json(await inflight)
+  }
+  let container: Awaited<ReturnType<typeof createRequestContainer>> | null = null
+  const compute = (async (): Promise<OrganizationSwitcherPayload> => {
+    container = await createRequestContainer()
     const em = container.resolve<EntityManager>('em')
     const rbac = container.resolve<RbacService>('rbacService')
 
     const rawTenantParam = url.searchParams.get('tenantId')
-    const cookieTenant = getSelectedTenantFromRequest(req)
+    const cookieTenant = rawCookieTenant
     const actorTenantId = typeof auth.tenantId === 'string' && auth.tenantId.trim().length > 0 ? auth.tenantId.trim() : null
     const actorIsSuperAdmin = auth.isSuperAdmin === true
 
@@ -128,14 +154,14 @@ export async function GET(req: NextRequest) {
     }
 
     if (!tenantId) {
-      return NextResponse.json({
+      return {
         items: [],
         selectedId: null,
         canManage: false,
         tenantId: null,
         tenants: tenantRecords,
         isSuperAdmin: actorIsSuperAdmin,
-      })
+      }
     }
 
     const scopedOrgId = actorTenantId && actorTenantId === tenantId ? auth.orgId ?? null : null
@@ -144,10 +170,7 @@ export async function GET(req: NextRequest) {
     const effectiveIsSuperAdmin = actorIsSuperAdmin || aclIsSuperAdmin
     const hasManageFeature =
       aclIsSuperAdmin ||
-      await rbac.userHasAllFeatures(auth.sub, ['directory.organizations.manage'], {
-        tenantId,
-        organizationId: scopedOrgId,
-      }) ||
+      rbac.hasAllFeatures(['directory.organizations.manage'], acl.features) ||
       actorIsSuperAdmin
 
     const orgFilter: FilterQuery<Organization> = {
@@ -160,7 +183,6 @@ export async function GET(req: NextRequest) {
       { orderBy: { name: 'ASC' } },
     )
     const hierarchy = computeHierarchyForOrganizations(orgEntities, tenantId)
-    const rawSelected = getSelectedOrganizationFromRequest(req)
     let hasSelectionCookie = rawSelected !== null
     const requestedAll = isAllOrganizationsSelection(rawSelected)
     const scope = await resolveOrganizationScope({
@@ -192,10 +214,10 @@ export async function GET(req: NextRequest) {
 
     const showMenu = menuData.nodes.length > 0 || hasManageFeature || effectiveIsSuperAdmin
     if (!showMenu) {
-      return NextResponse.json({ items: [], selectedId: null, canManage: false })
+      return { items: [], selectedId: null, canManage: false }
     }
 
-    const response = {
+    const response: OrganizationSwitcherPayload = {
       items: menuData.nodes,
       selectedId,
       canManage: !!hasManageFeature,
@@ -216,10 +238,21 @@ export async function GET(req: NextRequest) {
       query: Object.fromEntries(url.searchParams.entries()),
     })
 
-    return NextResponse.json(response)
+    return response
+  })()
+  organizationSwitcherInflight.set(cacheKey, compute)
+
+  try {
+    return NextResponse.json(await compute)
   } catch (err) {
     console.error('Failed to build organization switcher payload', err)
     return NextResponse.json({ items: [], selectedId: null, canManage: false, tenantId: null, tenants: [], isSuperAdmin: false }, { status: 500 })
+  } finally {
+    organizationSwitcherInflight.delete(cacheKey)
+    const disposable = container as unknown as { dispose?: () => Promise<void> } | null
+    if (typeof disposable?.dispose === 'function') {
+      await disposable.dispose()
+    }
   }
 }
 

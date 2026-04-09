@@ -17,56 +17,63 @@ export const metadata = {
 
 export async function GET(req: Request) {
   const { ctx, scope } = await resolveNotificationContext(req)
-  const em = ctx.container.resolve('em') as EntityManager
+  try {
+    const em = ctx.container.resolve('em') as EntityManager
 
-  const url = new URL(req.url)
-  const queryParams = Object.fromEntries(url.searchParams.entries())
-  const input = listNotificationsSchema.parse(queryParams)
+    const url = new URL(req.url)
+    const queryParams = Object.fromEntries(url.searchParams.entries())
+    const input = listNotificationsSchema.parse(queryParams)
 
-  const filters: Record<string, unknown> = {
-    recipientUserId: scope.userId,
-    tenantId: scope.tenantId,
-  }
+    const filters: Record<string, unknown> = {
+      recipientUserId: scope.userId,
+      tenantId: scope.tenantId,
+    }
 
-  if (input.status) {
-    filters.status = Array.isArray(input.status) ? { $in: input.status } : input.status
-  } else {
-    filters.status = { $ne: 'dismissed' }
-  }
-  if (input.type) {
-    filters.type = input.type
-  }
-  if (input.severity) {
-    filters.severity = input.severity
-  }
-  if (input.sourceEntityType) {
-    filters.sourceEntityType = input.sourceEntityType
-  }
-  if (input.sourceEntityId) {
-    filters.sourceEntityId = input.sourceEntityId
-  }
-  if (input.since) {
-    filters.createdAt = { $gt: new Date(input.since) }
-  }
+    if (input.status) {
+      filters.status = Array.isArray(input.status) ? { $in: input.status } : input.status
+    } else {
+      filters.status = { $ne: 'dismissed' }
+    }
+    if (input.type) {
+      filters.type = input.type
+    }
+    if (input.severity) {
+      filters.severity = input.severity
+    }
+    if (input.sourceEntityType) {
+      filters.sourceEntityType = input.sourceEntityType
+    }
+    if (input.sourceEntityId) {
+      filters.sourceEntityId = input.sourceEntityId
+    }
+    if (input.since) {
+      filters.createdAt = { $gt: new Date(input.since) }
+    }
 
-  const [notifications, total] = await Promise.all([
-    em.find(Notification, filters, {
-      orderBy: { createdAt: 'desc' },
-      limit: input.pageSize,
-      offset: (input.page - 1) * input.pageSize,
-    }),
-    em.count(Notification, filters),
-  ])
+    const [notifications, total] = await Promise.all([
+      em.find(Notification, filters, {
+        orderBy: { createdAt: 'desc' },
+        limit: input.pageSize,
+        offset: (input.page - 1) * input.pageSize,
+      }),
+      em.count(Notification, filters),
+    ])
 
-  const items = notifications.map(toNotificationDto)
+    const items = notifications.map(toNotificationDto)
 
-  return Response.json({
-    items,
-    total,
-    page: input.page,
-    pageSize: input.pageSize,
-    totalPages: Math.ceil(total / input.pageSize),
-  })
+    return Response.json({
+      items,
+      total,
+      page: input.page,
+      pageSize: input.pageSize,
+      totalPages: Math.ceil(total / input.pageSize),
+    })
+  } finally {
+    const disposable = ctx.container as unknown as { dispose?: () => Promise<void> }
+    if (typeof disposable.dispose === 'function') {
+      await disposable.dispose()
+    }
+  }
 }
 
 export async function POST(req: Request) {

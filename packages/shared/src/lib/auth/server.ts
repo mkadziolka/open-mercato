@@ -108,9 +108,10 @@ function applySuperAdminScope(
 
 async function resolveApiKeyAuth(secret: string): Promise<AuthContext> {
   if (!secret) return null
+  let container: { resolve: <T = unknown>(name: string) => T; dispose?: () => Promise<void> } | null = null
   try {
     const { createRequestContainer } = await import('@open-mercato/shared/lib/di/container')
-    const container = await createRequestContainer()
+    container = await createRequestContainer()
     const em = (container.resolve('em') as EntityManager)
     const { findApiKeyBySecret } = await import('@open-mercato/core/modules/api_keys/services/apiKeyService')
     const { Role } = await import('@open-mercato/core/modules/auth/data/entities')
@@ -148,6 +149,10 @@ async function resolveApiKeyAuth(secret: string): Promise<AuthContext> {
     }
   } catch {
     return null
+  } finally {
+    if (typeof container?.dispose === 'function') {
+      await container.dispose()
+    }
   }
 }
 

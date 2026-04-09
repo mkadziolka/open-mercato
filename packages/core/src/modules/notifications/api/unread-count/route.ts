@@ -9,15 +9,22 @@ export const metadata = {
 
 export async function GET(req: Request) {
   const { scope, ctx } = await resolveNotificationContext(req)
-  const em = ctx.container.resolve('em') as EntityManager
+  try {
+    const em = ctx.container.resolve('em') as EntityManager
 
-  const count = await em.count(Notification, {
-    recipientUserId: scope.userId,
-    tenantId: scope.tenantId,
-    status: 'unread',
-  })
+    const count = await em.count(Notification, {
+      recipientUserId: scope.userId,
+      tenantId: scope.tenantId,
+      status: 'unread',
+    })
 
-  return Response.json({ unreadCount: count })
+    return Response.json({ unreadCount: count })
+  } finally {
+    const disposable = ctx.container as unknown as { dispose?: () => Promise<void> }
+    if (typeof disposable.dispose === 'function') {
+      await disposable.dispose()
+    }
+  }
 }
 
 export const openApi = {

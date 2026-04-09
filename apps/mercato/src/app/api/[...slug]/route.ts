@@ -37,25 +37,33 @@ type LifecycleEventBus = {
   emitEvent?: (event: string, payload: unknown) => Promise<void>
 }
 
+async function disposeContainer(container: Awaited<ReturnType<typeof createRequestContainer>> | null): Promise<void> {
+  const disposable = container as unknown as { dispose?: () => Promise<void> } | null
+  if (typeof disposable?.dispose === 'function') {
+    await disposable.dispose()
+  }
+}
+
 function buildRequestId(req: NextRequest): string {
   return req.headers.get('x-request-id') ?? crypto.randomUUID()
 }
 
-async function resolveLifecycleEventBus(): Promise<LifecycleEventBus | null> {
-  const globalEventBus = getGlobalEventBus() as LifecycleEventBus | null
-  if (globalEventBus) return globalEventBus
-
-  try {
-    const container = await createRequestContainer()
-    return container.resolve('eventBus') as LifecycleEventBus
-  } catch {
-    return null
-  }
-}
-
 async function emitLifecycleEvent(eventId: ApplicationLifecycleEventId, payload: Record<string, unknown>): Promise<void> {
+  let container: Awaited<ReturnType<typeof createRequestContainer>> | null = null
   try {
-    const eventBus = await resolveLifecycleEventBus()
+    const globalEventBus = getGlobalEventBus() as LifecycleEventBus | null
+    if (globalEventBus) {
+      if (typeof globalEventBus.emit === 'function') {
+        await globalEventBus.emit(eventId, payload)
+        return
+      }
+      if (typeof globalEventBus.emitEvent === 'function') {
+        await globalEventBus.emitEvent(eventId, payload)
+        return
+      }
+    }
+    container = await createRequestContainer()
+    const eventBus = container.resolve('eventBus') as LifecycleEventBus | null
     if (!eventBus) return
     if (typeof eventBus.emit === 'function') {
       await eventBus.emit(eventId, payload)
@@ -66,6 +74,8 @@ async function emitLifecycleEvent(eventId: ApplicationLifecycleEventId, payload:
     }
   } catch {
     // Best-effort observability hook; never break API handling on lifecycle events.
+  } finally {
+    await disposeContainer(container)
   }
 }
 
@@ -121,50 +131,49 @@ async function checkAuthorization(
     if (!container) container = await createRequestContainer()
     return container
   }
-
-  if (auth && methodMetadata?.requireAuth !== false) {
-    const rawTenantCandidate = await extractTenantCandidate(req)
-    if (rawTenantCandidate !== undefined) {
-      const tenantCandidate = sanitizeTenantCandidate(rawTenantCandidate)
-      if (tenantCandidate !== undefined) {
-        const normalizedCandidate = normalizeTenantId(tenantCandidate) ?? null
-        const actorTenant = normalizeTenantId(auth.tenantId ?? null) ?? null
-        const tenantDiffers = normalizedCandidate !== actorTenant
-        if (tenantDiffers) {
-          try {
-            const guardContainer = await ensureContainer()
-            await enforceTenantSelection({ auth, container: guardContainer }, tenantCandidate)
-          } catch (error) {
-            if (error instanceof CrudHttpError) {
-              return NextResponse.json(error.body ?? { error: t('api.errors.forbidden', 'Forbidden') }, { status: error.status })
+  try {
+    if (auth && methodMetadata?.requireAuth !== false) {
+      const rawTenantCandidate = await extractTenantCandidate(req)
+      if (rawTenantCandidate !== undefined) {
+        const tenantCandidate = sanitizeTenantCandidate(rawTenantCandidate)
+        if (tenantCandidate !== undefined) {
+          const normalizedCandidate = normalizeTenantId(tenantCandidate) ?? null
+          const actorTenant = normalizeTenantId(auth.tenantId ?? null) ?? null
+          const tenantDiffers = normalizedCandidate !== actorTenant
+          if (tenantDiffers) {
+            try {
+              const guardContainer = await ensureContainer()
+              await enforceTenantSelection({ auth, container: guardContainer }, tenantCandidate)
+            } catch (error) {
+              if (error instanceof CrudHttpError) {
+                return NextResponse.json(error.body ?? { error: t('api.errors.forbidden', 'Forbidden') }, { status: error.status })
+              }
+              throw error
             }
-            throw error
           }
         }
       }
     }
-  }
 
-  if (requiredFeatures.length) {
-    if (!auth) {
-      return NextResponse.json({ error: t('api.errors.unauthorized', 'Unauthorized') }, { status: 401 })
-    }
-    const featureContainer = await ensureContainer()
-    const rbac = featureContainer.resolve<RbacService>('rbacService')
-    const featureContext = await resolveFeatureCheckContext({ container: featureContainer, auth, request: req })
-    const { organizationId } = featureContext
-    const ok = await rbac.userHasAllFeatures(auth.sub, requiredFeatures, {
-      tenantId: featureContext.scope.tenantId ?? auth.tenantId ?? null,
-      organizationId,
-    })
-    if (!ok) {
-      try {
-        const acl = await rbac.loadAcl(auth.sub, { tenantId: featureContext.scope.tenantId ?? auth.tenantId ?? null, organizationId })
+    if (requiredFeatures.length) {
+      if (!auth) {
+        return NextResponse.json({ error: t('api.errors.unauthorized', 'Unauthorized') }, { status: 401 })
+      }
+      const featureContainer = await ensureContainer()
+      const rbac = featureContainer.resolve<RbacService>('rbacService')
+      const featureContext = await resolveFeatureCheckContext({ container: featureContainer, auth, request: req })
+      const { organizationId } = featureContext
+      const tenantId = featureContext.scope.tenantId ?? auth.tenantId ?? null
+      const acl = await rbac.loadAcl(auth.sub, { tenantId, organizationId })
+      const hasOrganizationAccess =
+        !(acl.organizations && organizationId && !acl.organizations.includes(organizationId))
+      const ok = acl.isSuperAdmin || (hasOrganizationAccess && rbac.hasAllFeatures(requiredFeatures, acl.features))
+      if (!ok) {
         console.warn('[api] Forbidden - missing required features', {
           path: req.nextUrl.pathname,
           method: req.method,
           userId: auth.sub,
-          tenantId: featureContext.scope.tenantId ?? auth.tenantId ?? null,
+          tenantId,
           selectedOrganizationId: featureContext.scope.selectedId,
           organizationId,
           requiredFeatures,
@@ -172,26 +181,14 @@ async function checkAuthorization(
           isSuperAdmin: acl.isSuperAdmin,
           allowedOrganizations: acl.organizations,
         })
-      } catch (err) {
-        try {
-          console.warn('[api] Forbidden - could not resolve ACL for logging', {
-            path: req.nextUrl.pathname,
-            method: req.method,
-            userId: auth.sub,
-            tenantId: featureContext.scope.tenantId ?? auth.tenantId ?? null,
-            organizationId,
-            requiredFeatures,
-            error: err instanceof Error ? err.message : err,
-          })
-        } catch {
-          // best-effort logging; ignore secondary failures
-        }
+        return NextResponse.json({ error: t('api.errors.forbidden', 'Forbidden'), requiredFeatures }, { status: 403 })
       }
-      return NextResponse.json({ error: t('api.errors.forbidden', 'Forbidden'), requiredFeatures }, { status: 403 })
     }
-  }
 
-  return null
+    return null
+  } finally {
+    await disposeContainer(container)
+  }
 }
 
 function sanitizeTenantCandidate(candidate: unknown): unknown {

@@ -61,22 +61,6 @@ type NavGroup = {
 }
 
 export default async function BackendLayout({ children, params }: { children: React.ReactNode; params: Promise<{ slug?: string[] }> }) {
-  const auth = await getAuthFromCookies()
-  const cookieStore = await cookies()
-  const headerStore = await headers()
-  const rawSelectedOrg = cookieStore.get('om_selected_org')?.value
-  const rawSelectedTenant = cookieStore.get('om_selected_tenant')?.value
-  const selectedOrgForScope = rawSelectedOrg === undefined
-    ? undefined
-    : rawSelectedOrg && rawSelectedOrg.trim().length > 0
-      ? rawSelectedOrg
-      : null
-  const selectedTenantForScope = rawSelectedTenant === undefined
-    ? undefined
-    : rawSelectedTenant && rawSelectedTenant.trim().length > 0
-      ? rawSelectedTenant
-      : null
-
   let requestContainer: AwilixContainer | null = null
   const ensureContainer = async (): Promise<AwilixContainer> => {
     if (!requestContainer) {
@@ -84,107 +68,123 @@ export default async function BackendLayout({ children, params }: { children: Re
     }
     return requestContainer
   }
-
-  let path = headerStore.get('x-next-url') ?? ''
-  if (path.includes('?')) path = path.split('?')[0]
-  let resolvedParams: { slug?: string[] } = {}
   try {
-    resolvedParams = await params
-  } catch {
-    resolvedParams = {}
-  }
-  if (!path) {
-    const slug = resolvedParams.slug ?? []
-    path = '/backend' + (Array.isArray(slug) && slug.length ? '/' + slug.join('/') : '')
-  }
+    const auth = await getAuthFromCookies()
+    const cookieStore = await cookies()
+    const headerStore = await headers()
+    const rawSelectedOrg = cookieStore.get('om_selected_org')?.value
+    const rawSelectedTenant = cookieStore.get('om_selected_tenant')?.value
+    const selectedOrgForScope = rawSelectedOrg === undefined
+      ? undefined
+      : rawSelectedOrg && rawSelectedOrg.trim().length > 0
+        ? rawSelectedOrg
+        : null
+    const selectedTenantForScope = rawSelectedTenant === undefined
+      ? undefined
+      : rawSelectedTenant && rawSelectedTenant.trim().length > 0
+        ? rawSelectedTenant
+        : null
 
-  const ctxAuth = auth
-    ? {
-        roles: auth.roles || [],
-        sub: auth.sub,
-        tenantId: auth.tenantId,
-        orgId: auth.orgId,
-      }
-    : undefined
-  const ctx = { auth: ctxAuth, path }
+    let path = headerStore.get('x-next-url') ?? ''
+    if (path.includes('?')) path = path.split('?')[0]
+    let resolvedParams: { slug?: string[] } = {}
+    try {
+      resolvedParams = await params
+    } catch {
+      resolvedParams = {}
+    }
+    if (!path) {
+      const slug = resolvedParams.slug ?? []
+      path = '/backend' + (Array.isArray(slug) && slug.length ? '/' + slug.join('/') : '')
+    }
 
-  const { translate, locale, dict } = await resolveTranslations()
-  const embeddingConfigured = Boolean(
-    process.env.OPENAI_API_KEY ||
-    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
-    process.env.MISTRAL_API_KEY ||
-    process.env.COHERE_API_KEY ||
-    process.env.AWS_ACCESS_KEY_ID ||
-    process.env.OLLAMA_BASE_URL
-  )
-  const missingConfigMessage = translate('search.messages.missingConfig', 'Search requires configuring an embedding provider for semantic search.')
+    const ctxAuth = auth
+      ? {
+          roles: auth.roles || [],
+          sub: auth.sub,
+          tenantId: auth.tenantId,
+          orgId: auth.orgId,
+        }
+      : undefined
+    const ctx = { auth: ctxAuth, path }
 
-  const featureChecker = auth
-    ? async (features: string[]): Promise<Set<string>> => {
-        if (!features?.length) return new Set()
-        try {
-          const container = await ensureContainer()
-          const rbac = container.resolve<RbacService>('rbacService')
-          const { organizationId, scope, allowedOrganizationIds } = await resolveFeatureCheckContext({
-            container,
-            auth,
-            selectedId: selectedOrgForScope,
-            tenantId: selectedTenantForScope,
-          })
-          if (Array.isArray(allowedOrganizationIds) && allowedOrganizationIds.length === 0) {
+    const { translate, locale, dict } = await resolveTranslations()
+    const embeddingConfigured = Boolean(
+      process.env.OPENAI_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      process.env.MISTRAL_API_KEY ||
+      process.env.COHERE_API_KEY ||
+      process.env.AWS_ACCESS_KEY_ID ||
+      process.env.OLLAMA_BASE_URL
+    )
+    const missingConfigMessage = translate('search.messages.missingConfig', 'Search requires configuring an embedding provider for semantic search.')
+
+    const featureChecker = auth
+      ? async (features: string[]): Promise<Set<string>> => {
+          if (!features?.length) return new Set()
+          try {
+            const container = await ensureContainer()
+            const rbac = container.resolve<RbacService>('rbacService')
+            const { organizationId, scope, allowedOrganizationIds } = await resolveFeatureCheckContext({
+              container,
+              auth,
+              selectedId: selectedOrgForScope,
+              tenantId: selectedTenantForScope,
+            })
+            if (Array.isArray(allowedOrganizationIds) && allowedOrganizationIds.length === 0) {
+              return new Set()
+            }
+            const tenantForCheck = scope.tenantId ?? auth.tenantId ?? null
+            const orgForCheck = organizationId ?? null
+            const acl = await rbac.loadAcl(auth.sub, { tenantId: tenantForCheck, organizationId: orgForCheck })
+            const hasOrganizationAccess =
+              !(acl.organizations && orgForCheck && !acl.organizations.includes(orgForCheck))
+            if (!(acl.isSuperAdmin || hasOrganizationAccess)) {
+              return new Set()
+            }
+            return new Set(
+              features.filter((feature) => acl.isSuperAdmin || rbac.hasAllFeatures([feature], acl.features)),
+            )
+          } catch {
             return new Set()
           }
-          const tenantForCheck = scope.tenantId ?? auth.tenantId ?? null
-          const orgForCheck = organizationId ?? null
-          const context = { tenantId: tenantForCheck, organizationId: orgForCheck }
-          const hasAll = await rbac.userHasAllFeatures(auth.sub, features, context)
-          if (hasAll) return new Set(features)
-          const granted: string[] = []
-          for (const feature of features) {
-            const hasFeature = await rbac.userHasAllFeatures(auth.sub, [feature], context)
-            if (hasFeature) granted.push(feature)
-          }
-          return new Set(granted)
-        } catch {
-          return new Set()
         }
-      }
-    : undefined
+      : undefined
 
-  let userEntities: Array<{ entityId: string; label: string; href: string }> | undefined
-  if (auth) {
-    try {
-      const container = await ensureContainer()
-      const em = container.resolve('em') as EntityManager
-      const where: FilterQuery<CustomEntity> = {
-        isActive: true,
-        showInSidebar: true,
+    let userEntities: Array<{ entityId: string; label: string; href: string }> | undefined
+    if (auth) {
+      try {
+        const container = await ensureContainer()
+        const em = container.resolve('em') as EntityManager
+        const where: FilterQuery<CustomEntity> = {
+          isActive: true,
+          showInSidebar: true,
+        }
+        where.$and = [
+          { $or: [{ organizationId: auth.orgId ?? undefined }, { organizationId: null }] },
+          { $or: [{ tenantId: auth.tenantId ?? undefined }, { tenantId: null }] },
+        ]
+        const entities = await em.find(CustomEntity, where, { orderBy: { label: 'asc' } })
+        userEntities = entities.map((entity) => ({
+          entityId: entity.entityId,
+          label: entity.label,
+          href: `/backend/entities/user/${encodeURIComponent(entity.entityId)}/records`,
+        }))
+      } catch {
+        userEntities = undefined
       }
-      where.$and = [
-        { $or: [{ organizationId: auth.orgId ?? undefined }, { organizationId: null }] },
-        { $or: [{ tenantId: auth.tenantId ?? undefined }, { tenantId: null }] },
-      ]
-      const entities = await em.find(CustomEntity, where, { orderBy: { label: 'asc' } })
-      userEntities = entities.map((entity) => ({
-        entityId: entity.entityId,
-        label: entity.label,
-        href: `/backend/entities/user/${encodeURIComponent(entity.entityId)}/records`,
-      }))
-    } catch {
-      userEntities = undefined
     }
-  }
 
-  const entries = await buildAdminNav(
-    modules,
-    ctx,
-    userEntities,
-    (key, fallback) => (key ? translate(key, fallback) : fallback),
-    featureChecker ? { checkFeatures: featureChecker } : undefined,
-  )
-  const showIntegrationsButton = entries.some(
-    (entry) => entry.href === '/backend/integrations' && entry.enabled !== false && entry.hidden !== true,
-  )
+    const entries = await buildAdminNav(
+      modules,
+      ctx,
+      userEntities,
+      (key, fallback) => (key ? translate(key, fallback) : fallback),
+      featureChecker ? { checkFeatures: featureChecker } : undefined,
+    )
+    const showIntegrationsButton = entries.some(
+      (entry) => entry.href === '/backend/integrations' && entry.enabled !== false && entry.hidden !== true,
+    )
 
   const groupMap = new Map<string, {
     id: string
@@ -385,43 +385,49 @@ export default async function BackendLayout({ children, params }: { children: Re
     organizationId: auth?.orgId ?? null,
   }
 
-  return (
-    <>
-      <Script async src="https://w.appzi.io/w.js?token=TtIV6" strategy="afterInteractive" />
-      <I18nProvider locale={locale} dict={dict}>
-        <ComponentOverridesBootstrap>
-          <AiAssistantIntegration
-            tenantId={auth?.tenantId ?? null}
-            organizationId={auth?.orgId ?? null}
-          >
-            <AppShell
-              key={path}
-              productName={productName}
-              email={auth?.email}
-              groups={groups}
-              currentTitle={currentTitle}
-              breadcrumb={breadcrumb}
-              sidebarCollapsedDefault={initialCollapsed}
-              rightHeaderSlot={rightHeaderContent}
-              mobileSidebarSlot={mobileSidebarContent}
-              adminNavApi="/api/auth/admin/nav"
-              version={APP_VERSION}
-              settingsPathPrefixes={settingsPathPrefixes}
-              settingsSections={filteredSettingsSections}
-              settingsSectionTitle={translate('backend.nav.settings', 'Settings')}
-              profileSections={profileSections}
-              profileSectionTitle={translate('profile.page.title', 'Profile')}
-              profilePathPrefixes={profilePathPrefixes}
+    return (
+      <>
+        <Script async src="https://w.appzi.io/w.js?token=TtIV6" strategy="afterInteractive" />
+        <I18nProvider locale={locale} dict={dict}>
+          <ComponentOverridesBootstrap>
+            <AiAssistantIntegration
+              tenantId={auth?.tenantId ?? null}
+              organizationId={auth?.orgId ?? null}
             >
-              <PageInjectionBoundary path={path} context={injectionContext}>
-                {children}
-              </PageInjectionBoundary>
-            </AppShell>
-          </AiAssistantIntegration>
-        </ComponentOverridesBootstrap>
-      </I18nProvider>
-    </>
-  )
+              <AppShell
+                key={path}
+                productName={productName}
+                email={auth?.email}
+                groups={groups}
+                currentTitle={currentTitle}
+                breadcrumb={breadcrumb}
+                sidebarCollapsedDefault={initialCollapsed}
+                rightHeaderSlot={rightHeaderContent}
+                mobileSidebarSlot={mobileSidebarContent}
+                adminNavApi="/api/auth/admin/nav"
+                version={APP_VERSION}
+                settingsPathPrefixes={settingsPathPrefixes}
+                settingsSections={filteredSettingsSections}
+                settingsSectionTitle={translate('backend.nav.settings', 'Settings')}
+                profileSections={profileSections}
+                profileSectionTitle={translate('profile.page.title', 'Profile')}
+                profilePathPrefixes={profilePathPrefixes}
+              >
+                <PageInjectionBoundary path={path} context={injectionContext}>
+                  {children}
+                </PageInjectionBoundary>
+              </AppShell>
+            </AiAssistantIntegration>
+          </ComponentOverridesBootstrap>
+        </I18nProvider>
+      </>
+    )
+  } finally {
+    const disposable = requestContainer as unknown as { dispose?: () => Promise<void> } | null
+    if (typeof disposable?.dispose === 'function') {
+      await disposable.dispose()
+    }
+  }
 }
 export const dynamic = 'force-dynamic'
 
