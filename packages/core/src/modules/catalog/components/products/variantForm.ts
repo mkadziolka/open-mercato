@@ -19,6 +19,10 @@ export type VariantPriceDraft = {
   displayMode: 'including-tax' | 'excluding-tax'
 }
 
+type VariantPriceAmountValue = {
+  amount: string
+}
+
 export type VariantFormValues = {
   name: string
   sku: string
@@ -100,7 +104,7 @@ export function buildVariantMetadata(values: VariantFormValues): Record<string, 
 
 export function findInvalidVariantPriceKinds(
   priceKinds: PriceKindSummary[],
-  priceDrafts: Record<string, VariantPriceDraft> | undefined,
+  priceDrafts: Record<string, VariantPriceAmountValue> | undefined,
 ): string[] {
   const invalid: string[] = []
   for (const kind of priceKinds) {

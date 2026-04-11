@@ -69,6 +69,7 @@ import {
   updateDimensionValue,
   updateWeightValue,
 } from "@open-mercato/core/modules/catalog/components/products/productForm";
+import { findInvalidVariantPriceKinds } from "@open-mercato/core/modules/catalog/components/products/variantForm";
 import {
   buildAttachmentImageUrl,
   slugifyAttachmentFileName,
@@ -589,24 +590,24 @@ export default function CreateCatalogProductPage() {
                   ]) ?? [];
             const priceRequests: VariantPriceRequest[] = [];
             for (const variant of variantDrafts) {
+              const invalidPriceKinds = findInvalidVariantPriceKinds(
+                priceKinds,
+                variant.prices,
+              );
+              if (invalidPriceKinds.length) {
+                throw createCrudFormError(
+                  t(
+                    "catalog.products.create.errors.priceNonNegative",
+                    "Prices must be zero or greater.",
+                  ),
+                );
+              }
               const { resolvedVariantTaxRateId, resolvedVariantTaxRate } =
                 resolveVariantTax(variant);
               for (const priceKind of priceKinds) {
                 const value = variant.prices?.[priceKind.id]?.amount?.trim();
                 if (!value) continue;
                 const numeric = Number(value);
-                if (
-                  Number.isNaN(numeric) ||
-                  !Number.isFinite(numeric) ||
-                  numeric < 0
-                ) {
-                  throw createCrudFormError(
-                    t(
-                      "catalog.products.create.errors.priceNonNegative",
-                      "Prices must be zero or greater.",
-                    ),
-                  );
-                }
                 const currencyCode =
                   typeof priceKind.currencyCode === "string" &&
                   priceKind.currencyCode.trim().length
