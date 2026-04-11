@@ -7,6 +7,7 @@ import { SalesDocumentForm } from '../../../../components/documents/SalesDocumen
 import { apiCall } from '@open-mercato/ui/backend/utils/apiCall'
 import { flash } from '@open-mercato/ui/backend/FlashMessages'
 import { useT } from '@open-mercato/shared/lib/i18n/context'
+import { validateSalesMoneyAmountInput } from '../../../../lib/moneyValidation'
 
 interface InboxDraft {
   actionId: string
@@ -76,7 +77,13 @@ export default function CreateSalesDocumentPage() {
             kind: item.kind || (item.productId ? 'product' : 'service'),
           }
           if (item.productId) linePayload.productId = item.productId
-          if (item.unitPrice) linePayload.unitPriceNet = item.unitPrice
+          if (item.unitPrice) {
+            const unitPriceResult = validateSalesMoneyAmountInput(item.unitPrice)
+            if (!unitPriceResult.ok || unitPriceResult.numeric <= 0) {
+              throw new Error('Invalid inbox line unit price')
+            }
+            linePayload.unitPriceNet = unitPriceResult.numeric
+          }
           if (item.sku || item.catalogPrice) {
             linePayload.catalogSnapshot = {
               sku: item.sku ?? null,

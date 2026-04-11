@@ -5,6 +5,7 @@ import {
   invoiceCreateSchema,
   creditMemoCreateSchema,
 } from '../validators'
+import { getSalesLineComputedTotalValidationIssues } from '../../lib/moneyValidation'
 
 const MAX_QUANTITY = 999_999_999
 
@@ -18,6 +19,11 @@ const UUID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 function expectQuantityError(result: { success: false; error: { issues: { message: string }[] } }) {
   const messages = result.error.issues.map((i) => i.message)
   expect(messages).toContain('Quantity is too large.')
+}
+
+function expectMoneyError(result: { success: false; error: { issues: { message: string }[] } }) {
+  const messages = result.error.issues.map((i) => i.message)
+  expect(messages.some((message) => message.includes('decimal point'))).toBe(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -62,6 +68,38 @@ describe('quoteLineCreateSchema — quantity validation', () => {
     expect(result.success).toBe(false)
     if (!result.success) expectQuantityError(result)
   })
+
+  it('rejects unitPriceNet that exceeds numeric(18,4) integer precision', () => {
+    const result = quoteLineCreateSchema.safeParse({
+      ...base,
+      quantity: 1,
+      unitPriceNet: 100_000_000_000_000,
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expectMoneyError(result)
+  })
+
+  it('rejects unitPriceNet with more than 4 decimal places', () => {
+    const result = quoteLineCreateSchema.safeParse({
+      ...base,
+      quantity: 1,
+      unitPriceNet: '12.34567',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expectMoneyError(result)
+  })
+
+  it('flags a computed total that exceeds numeric(18,4)', () => {
+    const issues = getSalesLineComputedTotalValidationIssues({
+      quantity: MAX_QUANTITY,
+      unitPriceNet: 1_000_000,
+    })
+    expect(issues).toEqual([
+      expect.objectContaining({
+        path: 'totalNetAmount',
+      }),
+    ])
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -84,6 +122,28 @@ describe('orderLineCreateSchema — quantity validation', () => {
     const result = orderLineCreateSchema.safeParse({ ...base, quantity: MAX_QUANTITY + 1 })
     expect(result.success).toBe(false)
     if (!result.success) expectQuantityError(result)
+  })
+
+  it('rejects unitPriceGross that exceeds numeric(18,4) integer precision', () => {
+    const result = orderLineCreateSchema.safeParse({
+      ...base,
+      quantity: 1,
+      unitPriceGross: 100_000_000_000_000,
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) expectMoneyError(result)
+  })
+
+  it('flags a computed gross total that exceeds numeric(18,4)', () => {
+    const issues = getSalesLineComputedTotalValidationIssues({
+      quantity: MAX_QUANTITY,
+      unitPriceGross: 1_000_000,
+    })
+    expect(issues).toEqual([
+      expect.objectContaining({
+        path: 'totalGrossAmount',
+      }),
+    ])
   })
 })
 

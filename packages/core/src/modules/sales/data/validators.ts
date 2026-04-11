@@ -5,6 +5,10 @@ import {
 } from '@open-mercato/core/modules/dictionaries/data/validators'
 import { getPaymentProvider, getShippingProvider } from '../lib/providers'
 import { REFERENCE_UNIT_CODES } from '@open-mercato/shared/lib/units/unitCodes'
+import {
+  getSalesMoneyAmountValidationMessage,
+  validateSalesMoneyAmountInput,
+} from '../lib/moneyValidation'
 
 const uuid = () => z.string().uuid()
 
@@ -24,6 +28,18 @@ const decimal = (opts?: { min?: number; max?: number; message?: string }) => {
   if (typeof opts?.max === 'number') schema = schema.max(opts.max, opts.message)
   return schema
 }
+
+const salesMoneyAmountSchema = z
+  .custom<number>((value) => validateSalesMoneyAmountInput(value).ok, {
+    message: getSalesMoneyAmountValidationMessage(),
+  })
+  .transform((value) => {
+    const result = validateSalesMoneyAmountInput(value)
+    if (!result.ok) {
+      throw new Error('salesMoneyAmountSchema transform reached invalid state')
+    }
+    return result.numeric
+  })
 
 const MAX_QUANTITY = 999_999_999
 
@@ -297,17 +313,17 @@ const linePricingSchema = z.object({
   quantityUnit: z.string().trim().max(25).optional(),
   normalizedQuantity: decimal({ min: 0, max: MAX_QUANTITY, message: 'Quantity is too large.' }).optional(),
   normalizedUnit: z.string().trim().max(25).nullable().optional(),
-  unitPriceNet: decimal({ min: 0 }).optional(),
-  unitPriceGross: decimal({ min: 0 }).optional(),
+  unitPriceNet: salesMoneyAmountSchema.optional(),
+  unitPriceGross: salesMoneyAmountSchema.optional(),
   priceId: uuid().optional(),
   priceMode: z.enum(['net', 'gross']).optional(),
   taxRateId: uuid().optional(),
-  discountAmount: decimal({ min: 0 }).optional(),
+  discountAmount: salesMoneyAmountSchema.optional(),
   discountPercent: percentage().optional(),
   taxRate: percentage().optional(),
-  taxAmount: decimal({ min: 0 }).optional(),
-  totalNetAmount: decimal({ min: 0 }).optional(),
-  totalGrossAmount: decimal({ min: 0 }).optional(),
+  taxAmount: salesMoneyAmountSchema.optional(),
+  totalNetAmount: salesMoneyAmountSchema.optional(),
+  totalGrossAmount: salesMoneyAmountSchema.optional(),
 })
 
 const uomSnapshotSchema = z.object({

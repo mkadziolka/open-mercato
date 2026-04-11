@@ -40,6 +40,11 @@ import {
   extractCustomFieldValues,
 } from "./customFieldHelpers";
 import { canonicalizeUnitCode } from "@open-mercato/shared/lib/units/unitCodes";
+import {
+  getSalesMoneyAmountValidationMessage,
+  roundSalesMoneyAmount,
+  validateSalesMoneyAmountInput,
+} from "../../lib/moneyValidation";
 
 type ProductOption = {
   id: string;
@@ -1240,21 +1245,22 @@ export function LineItemDialog({
         );
       })();
 
-      const unitPriceNumber = Number(values.unitPrice ?? 0);
-      if (!Number.isFinite(unitPriceNumber) || unitPriceNumber <= 0) {
+      const unitPriceValidation = validateSalesMoneyAmountInput(values.unitPrice);
+      if (!unitPriceValidation.ok || unitPriceValidation.numeric <= 0) {
         throw createCrudFormError(
           t(
-            "sales.documents.items.errorUnitPrice",
-            "Unit price must be greater than 0.",
+            "sales.documents.items.errorUnitPriceFormat",
+            getSalesMoneyAmountValidationMessage("Unit price"),
           ),
           {
             unitPrice: t(
-              "sales.documents.items.errorUnitPrice",
-              "Unit price must be greater than 0.",
+              "sales.documents.items.errorUnitPriceFormat",
+              getSalesMoneyAmountValidationMessage("Unit price"),
             ),
           },
         );
       }
+      const unitPriceNumber = unitPriceValidation.numeric;
 
       const selectedPrice =
         !isCustomLine && values.priceId
@@ -1323,14 +1329,33 @@ export function LineItemDialog({
         resolvedPriceMode === "gross"
           ? unitPriceNumber
           : unitPriceNumber * (1 + normalizedTaxRate / 100);
-      const safeUnitPriceNet = Number.isFinite(unitPriceNetValue)
-        ? unitPriceNetValue
-        : unitPriceNumber;
-      const safeUnitPriceGross = Number.isFinite(unitPriceGrossValue)
-        ? unitPriceGrossValue
-        : unitPriceNumber;
-      const totalNetAmount = safeUnitPriceNet * qtyNumber;
-      const totalGrossAmount = safeUnitPriceGross * qtyNumber;
+      const safeUnitPriceNet = roundSalesMoneyAmount(
+        Number.isFinite(unitPriceNetValue) ? unitPriceNetValue : unitPriceNumber,
+      );
+      const safeUnitPriceGross = roundSalesMoneyAmount(
+        Number.isFinite(unitPriceGrossValue) ? unitPriceGrossValue : unitPriceNumber,
+      );
+      if (safeUnitPriceNet === null || safeUnitPriceGross === null) {
+        const message = t(
+          "sales.documents.items.errorCalculatedUnitPrice",
+          getSalesMoneyAmountValidationMessage("Calculated unit price"),
+        );
+        throw createCrudFormError(message, { unitPrice: message });
+      }
+      const totalNetAmount = roundSalesMoneyAmount(safeUnitPriceNet * qtyNumber);
+      const totalGrossAmount = roundSalesMoneyAmount(
+        safeUnitPriceGross * qtyNumber,
+      );
+      if (totalNetAmount === null || totalGrossAmount === null) {
+        const message = t(
+          "sales.documents.items.errorLineTotalTooLarge",
+          getSalesMoneyAmountValidationMessage("Line total"),
+        );
+        throw createCrudFormError(message, {
+          quantity: message,
+          unitPrice: message,
+        });
+      }
 
       const metadata = {
         ...(catalogSnapshot ?? {}),

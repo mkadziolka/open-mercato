@@ -115,6 +115,7 @@ import {
 } from "@open-mercato/shared/lib/units/unitCodes";
 import type { AuthContext } from "@open-mercato/shared/lib/auth/server";
 import type { TranslateWithFallbackFn } from "@open-mercato/shared/lib/i18n/translate";
+import { getSalesLineComputedTotalValidationIssues } from "../lib/moneyValidation";
 
 // CRUD events configuration for workflow triggers
 const orderCrudEvents: CrudEventsConfig<SalesOrder> = {
@@ -4267,15 +4268,17 @@ const createQuoteCommand: CommandHandler<
     });
     em.persist(quote);
 
-    const lineInputs = (parsed.lines ?? []).map((line, index) =>
-      quoteLineCreateSchema.parse({
+    const lineInputs = (parsed.lines ?? []).map((line, index) => {
+      const parsedLine = quoteLineCreateSchema.parse({
         ...line,
         organizationId: parsed.organizationId,
         tenantId: parsed.tenantId,
         quoteId: quote.id,
         lineNumber: line.lineNumber ?? index + 1,
-      }),
-    );
+      });
+      assertValidSalesLineComputedTotals(parsedLine);
+      return parsedLine;
+    });
     const uomResolver = createUomResolver();
     const normalizedLineInputs = await Promise.all(
       lineInputs.map(async (line) => {
@@ -5175,15 +5178,17 @@ const createOrderCommand: CommandHandler<
     });
     em.persist(order);
 
-    const lineInputs = (parsed.lines ?? []).map((line, index) =>
-      orderLineCreateSchema.parse({
+    const lineInputs = (parsed.lines ?? []).map((line, index) => {
+      const parsedLine = orderLineCreateSchema.parse({
         ...line,
         organizationId: parsed.organizationId,
         tenantId: parsed.tenantId,
         orderId: order.id,
         lineNumber: line.lineNumber ?? index + 1,
-      }),
-    );
+      });
+      assertValidSalesLineComputedTotals(parsedLine);
+      return parsedLine;
+    });
     const uomResolver = createUomResolver();
     const normalizedLineInputs = await Promise.all(
       lineInputs.map(async (line) => {
@@ -5971,6 +5976,21 @@ const quoteLineDeleteSchema = z.object({
   quoteId: z.string().uuid(),
 });
 
+function assertValidSalesLineComputedTotals(payload: {
+  quantity?: number | null;
+  unitPriceNet?: number | null;
+  unitPriceGross?: number | null;
+}): void {
+  const issues = getSalesLineComputedTotalValidationIssues(payload);
+  if (issues.length === 0) return;
+  throw new CrudHttpError(400, {
+    error: issues[0]?.message ?? "Invalid line totals",
+    fieldErrors: Object.fromEntries(
+      issues.map((issue) => [issue.path, issue.message]),
+    ),
+  });
+}
+
 const orderAdjustmentUpsertSchema = orderAdjustmentCreateSchema.extend({
   id: z.string().uuid().optional(),
 });
@@ -6011,6 +6031,7 @@ const orderLineUpsertCommand: CommandHandler<
   async execute(input, ctx) {
     const rawBody = (input?.body as Record<string, unknown> | undefined) ?? {};
     const parsed = orderLineUpsertSchema.parse(rawBody);
+    assertValidSalesLineComputedTotals(parsed);
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const order = await em.findOne(SalesOrder, {
       id: parsed.orderId,
@@ -6483,6 +6504,7 @@ const quoteLineUpsertCommand: CommandHandler<
   async execute(input, ctx) {
     const rawBody = (input?.body as Record<string, unknown> | undefined) ?? {};
     const parsed = quoteLineUpsertSchema.parse(rawBody);
+    assertValidSalesLineComputedTotals(parsed);
     const em = (ctx.container.resolve("em") as EntityManager).fork();
     const quote = await em.findOne(SalesQuote, {
       id: parsed.quoteId,
