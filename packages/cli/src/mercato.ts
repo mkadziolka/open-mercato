@@ -961,7 +961,7 @@ export async function run(argv = process.argv) {
           return
         }
 
-        const queue = await createQueueFromEnv('gamification:event-process')
+        const queue = await createQueueFromEnv('gamification-event-process')
         const traceId = `gamification-requeue-${Date.now()}`
 
         try {
@@ -976,7 +976,7 @@ export async function run(argv = process.argv) {
           await queue.close()
         }
 
-        console.log(`Re-enqueued ${rows.length} gamification event(s) to "gamification:event-process".`)
+        console.log(`Re-enqueued ${rows.length} gamification event(s) to "gamification-event-process".`)
       },
     },
   ]
