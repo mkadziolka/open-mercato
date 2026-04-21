@@ -1,8 +1,12 @@
 import { z } from 'zod'
+import type { EntityManager } from '@mikro-orm/core'
+import { NextResponse } from 'next/server'
 import { makeCrudRoute } from '@open-mercato/shared/lib/crud/factory'
 import { resolveCrudRecordId } from '@open-mercato/shared/lib/api/scoped'
 import { resolveTranslations } from '@open-mercato/shared/lib/i18n/server'
 import { CrudHttpError } from '@open-mercato/shared/lib/crud/errors'
+import { createRequestContainer } from '@open-mercato/shared/lib/di/container'
+import type { AuthContext } from '@open-mercato/shared/lib/auth/server'
 import { ScheduledJob } from '../../data/entities.js'
 import {
   scheduleCreateSchema,
@@ -94,40 +98,10 @@ const crud = makeCrudRoute({
         updatedAt: item.updated_at,
       }
     },
-    buildFilters: async (query, ctx) => {
-      const filters: Record<string, unknown> = {}
-
-      filters.organization_id = { $eq: ctx.auth?.orgId }
-
-      if (query.id) {
-        filters.id = { $eq: query.id }
-      }
-
-      if (query.search) {
-        filters.$or = [
-          { name: { $ilike: `%${escapeLikePattern(query.search)}%` } },
-          { description: { $ilike: `%${escapeLikePattern(query.search)}%` } },
-        ]
-      }
-
-      if (query.scopeType) {
-        filters.scope_type = { $eq: query.scopeType }
-      }
-
-      if (query.isEnabled !== undefined) {
-        filters.is_enabled = { $eq: query.isEnabled }
-      }
-
-      if (query.sourceType) {
-        filters.source_type = { $eq: query.sourceType }
-      }
-
-      if (query.sourceModule) {
-        filters.source_module = { $eq: query.sourceModule }
-      }
-
-      return filters
-    },
+    // GET is implemented by a custom handler below (see `export async function GET`).
+    // This buildFilters is retained only because the CRUD factory expects
+    // a list config when entityId is present; the custom handler bypasses it.
+    buildFilters: async () => ({}),
   },
   actions: {
     create: {
@@ -199,7 +173,131 @@ const crud = makeCrudRoute({
   },
 })
 
-export const { GET, POST, PUT, DELETE } = crud
+const { POST, PUT, DELETE } = crud
+export { POST, PUT, DELETE }
+
+function toIso(value: unknown): string | null {
+  if (!value) return null
+  if (value instanceof Date) return value.toISOString()
+  if (typeof value === 'string') {
+    const parsed = new Date(value)
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
+  }
+  return null
+}
+
+function serializeScheduledJob(schedule: ScheduledJob): Record<string, unknown> {
+  return {
+    id: schedule.id,
+    name: schedule.name,
+    description: schedule.description ?? null,
+    scopeType: schedule.scopeType,
+    organizationId: schedule.organizationId ?? null,
+    tenantId: schedule.tenantId ?? null,
+    scheduleType: schedule.scheduleType,
+    scheduleValue: schedule.scheduleValue,
+    timezone: schedule.timezone,
+    targetType: schedule.targetType,
+    targetQueue: schedule.targetQueue ?? null,
+    targetCommand: schedule.targetCommand ?? null,
+    targetPayload: schedule.targetPayload ?? null,
+    requireFeature: schedule.requireFeature ?? null,
+    isEnabled: schedule.isEnabled,
+    lastRunAt: toIso(schedule.lastRunAt ?? null),
+    nextRunAt: toIso(schedule.nextRunAt ?? null),
+    sourceType: schedule.sourceType,
+    sourceModule: schedule.sourceModule ?? null,
+    createdAt: toIso(schedule.createdAt) ?? '',
+    updatedAt: toIso(schedule.updatedAt) ?? '',
+  }
+}
+
+/**
+ * Custom GET handler
+ *
+ * The default CRUD list path enforces a strict `tenant_id = auth.tenantId` guard
+ * through QueryEngine/ORM scoping, which would hide:
+ * - system-scope rows (tenant_id IS NULL), and
+ * - tenant/organization rows whose visibility depends on scope_type.
+ *
+ * This handler queries ScheduledJob directly and applies scope-aware visibility:
+ * - `system` rows: visible to every authenticated user allowed to view jobs
+ * - `tenant` rows: visible to members of the same tenant
+ * - `organization` rows: visible to members of the same organization
+ *
+ * Auth & feature enforcement are performed by the framework via `metadata.GET`.
+ */
+export async function GET(req: Request, ctx: { params: Record<string, unknown>; auth: AuthContext }) {
+  const url = new URL(req.url)
+  const searchParams = Object.fromEntries(url.searchParams.entries())
+  const parsedQuery = scheduleListQuerySchema.safeParse(searchParams)
+  if (!parsedQuery.success) {
+    return NextResponse.json(
+      { error: 'Invalid query parameters', issues: parsedQuery.error.issues },
+      { status: 400 },
+    )
+  }
+  const query = parsedQuery.data
+
+  const container = await createRequestContainer()
+  try {
+    const em = (container.resolve('em') as EntityManager).fork()
+
+    const authTenantId = ctx.auth?.tenantId ?? null
+    const authOrgId = ctx.auth?.orgId ?? null
+
+    const visibilityOr: Array<Record<string, unknown>> = [{ scopeType: 'system' }]
+    if (authTenantId) {
+      visibilityOr.push({ scopeType: 'tenant', tenantId: authTenantId })
+    }
+    if (authOrgId) {
+      visibilityOr.push({ scopeType: 'organization', organizationId: authOrgId })
+    }
+
+    const where: Record<string, unknown> = {
+      deletedAt: null,
+      $or: visibilityOr,
+    }
+
+    if (query.id) where.id = query.id
+    if (query.scopeType) where.scopeType = query.scopeType
+    if (query.isEnabled !== undefined) where.isEnabled = query.isEnabled
+    if (query.sourceType) where.sourceType = query.sourceType
+    if (query.sourceModule) where.sourceModule = query.sourceModule
+    if (query.search) {
+      const pattern = `%${escapeLikePattern(query.search)}%`
+      where.$and = [
+        { $or: [{ name: { $ilike: pattern } }, { description: { $ilike: pattern } }] },
+      ]
+    }
+
+    const sortField = query.sort === 'name' || query.sort === 'nextRunAt' || query.sort === 'lastRunAt' || query.sort === 'createdAt'
+      ? query.sort
+      : 'createdAt'
+    const sortDir = query.order === 'asc' ? 'ASC' : 'DESC'
+
+    const [items, total] = await em.findAndCount(ScheduledJob, where as any, {
+      limit: query.pageSize,
+      offset: (query.page - 1) * query.pageSize,
+      orderBy: { [sortField]: sortDir } as any,
+    })
+
+    const totalPages = Math.max(1, Math.ceil(total / query.pageSize))
+
+    return NextResponse.json({
+      items: items.map(serializeScheduledJob),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      totalPages,
+    })
+  } finally {
+    const disposable = container as unknown as { dispose?: () => Promise<void> }
+    if (typeof disposable.dispose === 'function') {
+      try { await disposable.dispose() } catch { /* noop */ }
+    }
+  }
+}
 
 // Response schemas
 const scheduledJobListItemSchema = z.object({
