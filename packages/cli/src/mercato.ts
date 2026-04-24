@@ -924,6 +924,7 @@ export async function run(argv = process.argv) {
 
         const rows = await em.getConnection().execute<Array<{
           id: string
+          user_id: string | null
           is_processed: boolean
           external_id: string | null
           source_code: string
@@ -932,6 +933,7 @@ export async function run(argv = process.argv) {
           `
             select
               e.id,
+              e.user_id,
               e.is_processed,
               e.external_id,
               s.code as source_code,
@@ -969,6 +971,7 @@ export async function run(argv = process.argv) {
             const jobId = await queue.enqueue({
               eventId: row.id,
               traceId,
+              userId: row.user_id,
             })
             console.log(`  enqueued event=${row.id} job=${jobId}`)
           }
