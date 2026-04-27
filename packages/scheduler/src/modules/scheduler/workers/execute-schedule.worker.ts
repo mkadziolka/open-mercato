@@ -2,11 +2,12 @@ import type { QueuedJob, JobContext, WorkerMeta } from '@open-mercato/queue'
 import { createQueue } from '@open-mercato/queue'
 import { getRedisUrl } from '@open-mercato/shared/lib/redis/connection'
 import type { EntityManager } from '@mikro-orm/core'
-import { ScheduledJob } from '../data/entities.js'
 import { CommandBus } from '@open-mercato/shared/lib/commands'
 import type { CommandRuntimeContext } from '@open-mercato/shared/lib/commands'
 import type { AppContainer } from '@open-mercato/shared/lib/di/container'
-import { emitSchedulerEvent } from '../events.js'
+
+// Runtime imports from module-relative paths must stay lazy so the CLI worker
+// scanner can import this file under plain Node (see workers-registered.test.ts).
 
 // Worker metadata for auto-discovery
 export const metadata: WorkerMeta = {
@@ -63,6 +64,11 @@ export default async function executeScheduleWorker(
     })
     throw new Error('scheduleId is required in job payload')
   }
+
+  const [{ ScheduledJob }, { emitSchedulerEvent }] = await Promise.all([
+    import('../data/entities.js'),
+    import('../events.js'),
+  ])
 
   const { scheduleId } = payload
 

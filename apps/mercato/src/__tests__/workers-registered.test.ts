@@ -64,12 +64,6 @@ const KNOWN_UNREGISTERED_WORKERS: ReadonlyArray<{
     reason:
       'TODO(open-mercato/core#messages): top-level runtime imports of `../../auth/data/entities`, `../data/entities`, `../events`, `../lib/*` break `moduleHasExport` under plain Node loader. Convert to lazy `import()` inside the handler.',
   },
-  {
-    modId: 'scheduler',
-    relName: 'execute-schedule.worker',
-    reason:
-      "TODO(open-mercato/scheduler): top-level runtime imports of `../data/entities.js` and `../events.js` break `moduleHasExport` under plain Node loader. Convert to lazy `import()` inside the handler.",
-  },
 ]
 
 function isKnownUnregistered(modId: string, relName: string): boolean {
