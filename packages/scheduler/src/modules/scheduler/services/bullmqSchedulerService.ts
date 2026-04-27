@@ -9,6 +9,11 @@ interface BullRepeatableJob {
   key: string
   name: string
   id?: string | null
+  /** Cron pattern when scheduleType === 'cron' */
+  pattern?: string | null
+  /** Interval in ms when scheduleType === 'interval' */
+  every?: number | null
+  tz?: string | null
 }
 
 interface BullRepeatOptions {
@@ -93,17 +98,21 @@ export class BullMQSchedulerService {
       // Build BullMQ repeat options based on schedule type
       const repeatOpts = this.buildRepeatOptions(schedule)
 
-      // Add repeatable job to BullMQ
-      // IMPORTANT: Wrap in QueuedJob format to match queue strategy expectations
-      // BullMQ will store this in job.data, and the async strategy worker expects
-      // job.data to be a QueuedJob with id, payload, and createdAt
       const queue = await this.getQueue()
       const jobName = `schedule-${schedule.id}`
-      
-      // For repeatable jobs, we need to provide a stable ID in the data
-      // that will be used for each repeat instance
-      // CRITICAL: Include scope information (tenantId, organizationId, scopeType)
-      // for proper multi-tenant isolation and auditing
+
+      // Remove all existing repeatable jobs for this schedule before adding the new one.
+      // BullMQ treats each unique (name + pattern) combination as a separate repeatable
+      // job, so calling queue.add() with a changed cron leaves the old job alive. An
+      // explicit remove-first approach keeps exactly one active entry per schedule.
+      const existing = await queue.getRepeatableJobs?.() ?? []
+      for (const job of existing) {
+        if (job.id === jobName || job.name === jobName) {
+          await queue.removeRepeatableByKey?.(job.key)
+          console.debug(`[scheduler:bullmq] Removed stale repeatable job: ${job.key}`)
+        }
+      }
+
       const jobData = {
         id: jobName,
         payload: { 
@@ -115,38 +124,23 @@ export class BullMQSchedulerService {
         createdAt: new Date().toISOString(),
       }
       
-      console.debug(`[scheduler:bullmq] Adding repeatable job with data:`, {
-        jobName,
-        scheduleId: schedule.id,
-        scopeType: schedule.scopeType,
-        tenantId: schedule.tenantId,
-        organizationId: schedule.organizationId,
-        repeatOpts,
-        jobData,
-      })
-      
       await queue.add(
-        jobName, // Job name - used as part of repeatable job key
-        jobData, // Job data in QueuedJob format
+        jobName,
+        jobData,
         {
           repeat: repeatOpts,
-          // Don't set jobId for repeatable jobs - BullMQ generates unique IDs for each instance
           removeOnComplete: {
-            age: 86400 * 30, // Keep completed jobs for 30 days (execution history)
-            count: 1000,     // Keep last 1000 completed jobs
+            age: 86400 * 30,
+            count: 1000,
           },
           removeOnFail: {
-            age: 86400 * 90, // Keep failed jobs for 90 days (debugging/audit)
-            count: 5000,     // Keep last 5000 failed jobs
+            age: 86400 * 90,
+            count: 5000,
           },
         }
       )
 
-      console.debug(`[scheduler:bullmq] Registered schedule: ${schedule.name} (${schedule.id})`, {
-        type: schedule.scheduleType,
-        pattern: schedule.scheduleValue,
-        timezone: schedule.timezone,
-      })
+      console.log(`[scheduler:bullmq] Registered schedule: ${schedule.name} (${schedule.id}) pattern=${schedule.scheduleValue}`)
     } catch (error: unknown) {
       console.error(`[scheduler:bullmq] Failed to register schedule: ${schedule.id}`, error)
       throw error
@@ -214,10 +208,30 @@ export class BullMQSchedulerService {
 
     const dbScheduleIds = new Set(dbSchedules.map(s => s.id))
 
-    // Register schedules that exist in DB but not in BullMQ
+    // Build a map of existing BullMQ jobs by scheduleId for pattern comparison
+    const bullmqJobByScheduleId = new Map<string, BullRepeatableJob>()
+    for (const job of repeatableJobs) {
+      const rawId = job.id?.startsWith('schedule-') ? job.id : job.name?.startsWith('schedule-') ? job.name : null
+      if (rawId) {
+        bullmqJobByScheduleId.set(rawId.replace('schedule-', ''), job)
+      }
+    }
+
+    // Register or re-register schedules that are missing or have a changed pattern
     for (const schedule of dbSchedules) {
-      if (!bullmqScheduleIds.has(schedule.id)) {
-        console.debug(`[scheduler:bullmq] Registering missing schedule: ${schedule.name}`)
+      const existing = bullmqJobByScheduleId.get(schedule.id)
+      if (!existing) {
+        console.log(`[scheduler:bullmq] Registering missing schedule: ${schedule.name}`)
+        await this.register(schedule)
+        continue
+      }
+      // Detect cron/interval mismatch and force re-registration
+      const patternMismatch = schedule.scheduleType === 'cron' && existing.pattern !== schedule.scheduleValue
+      const intervalMs = schedule.scheduleType === 'interval' ? this.safeParseInterval(schedule.scheduleValue) : null
+      const intervalMismatch = schedule.scheduleType === 'interval' && existing.every !== intervalMs
+      const tzMismatch = (existing.tz ?? 'UTC') !== (schedule.timezone ?? 'UTC')
+      if (patternMismatch || intervalMismatch || tzMismatch) {
+        console.log(`[scheduler:bullmq] Re-registering changed schedule: ${schedule.name} (pattern/interval/tz changed)`)
         await this.register(schedule)
       }
     }
@@ -230,7 +244,15 @@ export class BullMQSchedulerService {
       }
     }
 
-    console.debug(`[scheduler:bullmq] Sync complete - ${dbSchedules.length} schedules active`)
+    console.log(`[scheduler:bullmq] Sync complete - ${dbSchedules.length} schedules active`)
+  }
+
+  private safeParseInterval(value: string): number | null {
+    try {
+      return parseInterval(value)
+    } catch {
+      return null
+    }
   }
 
   /**
