@@ -11,8 +11,8 @@ interface BullRepeatableJob {
   id?: string | null
   /** Cron pattern when scheduleType === 'cron' */
   pattern?: string | null
-  /** Interval in ms when scheduleType === 'interval' */
-  every?: number | null
+  /** Interval in ms (BullMQ returns this as a string) */
+  every?: string | number | null
   tz?: string | null
 }
 
@@ -228,7 +228,8 @@ export class BullMQSchedulerService {
       // Detect cron/interval mismatch and force re-registration
       const patternMismatch = schedule.scheduleType === 'cron' && existing.pattern !== schedule.scheduleValue
       const intervalMs = schedule.scheduleType === 'interval' ? this.safeParseInterval(schedule.scheduleValue) : null
-      const intervalMismatch = schedule.scheduleType === 'interval' && existing.every !== intervalMs
+      const existingEveryMs = existing.every != null ? Number(existing.every) : null
+      const intervalMismatch = schedule.scheduleType === 'interval' && existingEveryMs !== intervalMs
       const tzMismatch = (existing.tz ?? 'UTC') !== (schedule.timezone ?? 'UTC')
       if (patternMismatch || intervalMismatch || tzMismatch) {
         console.log(`[scheduler:bullmq] Re-registering changed schedule: ${schedule.name} (pattern/interval/tz changed)`)
