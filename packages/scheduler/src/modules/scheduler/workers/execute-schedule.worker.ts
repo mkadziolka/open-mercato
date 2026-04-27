@@ -72,7 +72,7 @@ export default async function executeScheduleWorker(
 
   const { scheduleId } = payload
 
-  const em = ctx.resolve<EntityManager>('em')
+  const em = ctx.resolve<EntityManager>('em').fork()
   const rbacService = ctx.resolve<{ tenantHasFeature(tenantId: string | null | undefined, feature: string): Promise<boolean> }>('rbacService')
 
   // Load fresh schedule from database
