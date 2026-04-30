@@ -11,7 +11,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "test": "jest --config jest.config.cjs",
-    "test:gamification": "jest --config jest.config.cjs --testPathPatterns=gamification-module.integration",
+    "test:gamification": "jest --config jest.config.cjs --testPathPatterns=gamification-module.integration.test",
     "generate": "yarn sync:gamification && mercato generate",
     "db:generate": "mercato db generate",
     "db:migrate": "mercato db migrate",
