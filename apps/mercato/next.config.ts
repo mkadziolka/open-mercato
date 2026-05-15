@@ -3,6 +3,7 @@ import path from "node:path";
 
 const nextConfig: NextConfig = {
   distDir: '.mercato/next',
+  allowedDevOrigins: ['acpmavps.flowmakersdigital.pl'],
   experimental: {
     serverMinification: false,
     turbopackMinify: false,
