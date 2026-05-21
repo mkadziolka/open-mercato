@@ -112,6 +112,10 @@ docker/opencode/opencode.jsonc
 # Local runtime mirror synced from gamification-engine/modules/gamification
 apps/mercato/src/modules/gamification/
 
+# Bootstrap import working copy (canonical data lives at repo-root historical_data/)
+apps/mercato/historical_data/
+apps/mercato/historical_data.zip
+
 # Local npm registry (Verdaccio)
 .npmrc
 !.npmrc.local
