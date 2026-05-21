@@ -1063,11 +1063,13 @@ export function DataTable<T>({
   }, [data, injectedClientFilters, filterValues])
   const hasInjectedBulkActions = injectedBulkActions.length > 0
   const [rowSelection, setRowSelection] = React.useState<RowSelectionState>({})
+  const serverSideSorting = Boolean(onSortingChange)
   const table = useReactTable<T>({
     data: clientFilteredData,
     columns: mergedColumns,
     getCoreRowModel: getCoreRowModel(),
-    ...(sortable ? { getSortedRowModel: getSortedRowModel() } : {}),
+    ...(sortable && !serverSideSorting ? { getSortedRowModel: getSortedRowModel() } : {}),
+    manualSorting: serverSideSorting,
     state: { sorting, columnVisibility, columnOrder, rowSelection },
     enableRowSelection: hasInjectedBulkActions,
     onSortingChange: (updater) => {
