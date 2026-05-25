@@ -116,6 +116,9 @@ apps/mercato/src/modules/gamification/
 apps/mercato/historical_data/
 apps/mercato/historical_data.zip
 
+# Bootstrap migration badge/achievement JSON (SPEC-017D; operator data)
+apps/mercato/badges_achievments_migration/
+
 # Local npm registry (Verdaccio)
 .npmrc
 !.npmrc.local
