@@ -35,7 +35,7 @@ import type { AwilixContainer } from 'awilix'
 import type { RbacService } from '@open-mercato/core/modules/auth/services/rbacService'
 import { resolveFeatureCheckContext } from '@open-mercato/core/modules/directory/utils/organizationScope'
 import { profileSections, profilePathPrefixes } from '@open-mercato/core/modules/auth/lib/profile-sections'
-import { APP_VERSION } from '@open-mercato/shared/lib/version'
+import { GAMIFICATION_VERSION } from '@/modules/gamification/lib/version'
 import { PageInjectionBoundary } from '@open-mercato/ui/backend/injection/PageInjectionBoundary'
 import { AiAssistantIntegration, AiChatHeaderButton } from '@open-mercato/ai-assistant/frontend'
 import { CustomEntity } from '@open-mercato/core/modules/entities/data/entities'
@@ -405,7 +405,7 @@ export default async function BackendLayout({ children, params }: { children: Re
                 rightHeaderSlot={rightHeaderContent}
                 mobileSidebarSlot={mobileSidebarContent}
                 adminNavApi="/api/auth/admin/nav"
-                version={APP_VERSION}
+                version={GAMIFICATION_VERSION}
                 settingsPathPrefixes={settingsPathPrefixes}
                 settingsSections={filteredSettingsSections}
                 settingsSectionTitle={translate('backend.nav.settings', 'Settings')}
