@@ -174,6 +174,19 @@ export interface Queue<T = unknown> {
     completed: number
     failed: number
   }>
+
+  /**
+   * Register a repeatable (cron / fixed-interval) job on this queue.
+   *
+   * Optional capability: implemented by the async (BullMQ) strategy via
+   * repeatable jobs. The local strategy omits it (continuous polling has no
+   * scheduler concept). Callers MUST guard with `queue.schedule?.(...)`.
+   *
+   * Implementations should be idempotent: re-registering the same `jobName`
+   * replaces any prior schedule so a changed interval/pattern does not leave a
+   * stale repeatable behind.
+   */
+  schedule?(jobName: string, options: WorkerRepeat): Promise<void>
 }
 
 // ============================================================================
@@ -213,6 +226,20 @@ export type CreateQueueFn = <T = unknown>(
  * }
  * ```
  */
+/**
+ * Periodic schedule for a worker / queue.
+ *
+ * Exactly one of `everyMs` (fixed interval, milliseconds) or `cron` (cron
+ * pattern) should be provided. When set on `WorkerMeta`, the worker runner
+ * seeds a matching repeatable job at startup (async strategy only).
+ */
+export type WorkerRepeat = {
+  /** Fixed interval in milliseconds between runs. */
+  everyMs?: number
+  /** Cron pattern (alternative to `everyMs`). */
+  cron?: string
+}
+
 export type WorkerMeta = {
   /** Queue name this worker processes */
   queue: string
@@ -220,6 +247,12 @@ export type WorkerMeta = {
   id?: string
   /** Worker concurrency (default: 1) */
   concurrency?: number
+  /**
+   * Optional periodic schedule. When set (async strategy), the worker runner
+   * seeds a repeatable job so the handler runs on the given interval/pattern
+   * without any external scheduler. Omit for event-driven workers.
+   */
+  repeat?: WorkerRepeat
 }
 
 /**
@@ -235,4 +268,6 @@ export type WorkerDescriptor<T = unknown> = {
   handler: JobHandler<T>
   /** Concurrency level */
   concurrency: number
+  /** Optional periodic schedule (see `WorkerMeta.repeat`). */
+  repeat?: WorkerRepeat
 }

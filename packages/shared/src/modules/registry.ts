@@ -170,6 +170,10 @@ export type Module = {
     id: string
     queue: string
     concurrency: number
+    // Optional periodic schedule (SPEC-036). When set (async strategy), the
+    // queue worker runner seeds a repeatable job so the handler runs on the
+    // given interval/pattern. `null` = no schedule (event-driven worker).
+    repeat?: { everyMs?: number; cron?: string } | null
     // Imported function reference; will be called by the queue worker
     handler: (job: unknown, ctx: unknown) => Promise<void> | void
   }>

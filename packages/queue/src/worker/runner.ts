@@ -1,5 +1,5 @@
 import { createQueue } from '../factory'
-import type { Queue, JobHandler, AsyncQueueOptions, QueueStrategyType } from '../types'
+import type { Queue, JobHandler, AsyncQueueOptions, QueueStrategyType, WorkerRepeat } from '../types'
 
 /**
  * Options for running a queue worker.
@@ -19,6 +19,12 @@ export type WorkerRunnerOptions<T = unknown> = {
   background?: boolean
   /** Queue strategy to use. Defaults to QUEUE_STRATEGY env var or 'local' */
   strategy?: QueueStrategyType
+  /**
+   * Optional periodic schedule. When set (async strategy), the runner seeds a
+   * repeatable job after starting the worker so the handler runs on the given
+   * interval/pattern without an external scheduler.
+   */
+  repeat?: WorkerRepeat
 }
 
 const managedQueues = new Set<Queue<unknown>>()
@@ -111,6 +117,7 @@ export async function runWorker<T = unknown>(
     gracefulShutdown = true,
     background = false,
     strategy: strategyOption,
+    repeat,
   } = options
 
   // Determine queue strategy from option, env var, or default to 'local'
@@ -132,6 +139,17 @@ export async function runWorker<T = unknown>(
 
   // Start processing
   await queue.process(handler)
+
+  // Seed a repeatable job for periodic workers (async strategy only). BullMQ
+  // dedups repeatable jobs by key, so multiple worker processes converge to a
+  // single scheduler. Best-effort: a scheduling hiccup must not stop the worker.
+  if (repeat && strategy === 'async' && typeof queue.schedule === 'function') {
+    try {
+      await queue.schedule(`${queueName}:repeat`, repeat)
+    } catch (error) {
+      console.error(`[worker] Failed to seed repeatable for "${queueName}":`, error)
+    }
+  }
 
   console.log(`[worker] Worker running with concurrency ${concurrency}`)
 

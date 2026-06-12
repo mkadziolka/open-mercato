@@ -275,7 +275,7 @@ async function processWorkers(options: {
     imports.push(`import ${importName}, * as ${metaName} from '${importPath}'`)
     const wid = [modId, 'workers', ...segs, name].filter(Boolean).join(':')
     workers.push(
-      `{ id: (${metaName}.metadata as { id?: string })?.id || '${wid}', queue: (${metaName}.metadata as { queue: string }).queue, concurrency: (${metaName}.metadata as { concurrency?: number })?.concurrency ?? 1, handler: ${importName} as (job: unknown, ctx: unknown) => Promise<void> }`
+      `{ id: (${metaName}.metadata as { id?: string })?.id || '${wid}', queue: (${metaName}.metadata as { queue: string }).queue, concurrency: (${metaName}.metadata as { concurrency?: number })?.concurrency ?? 1, repeat: (${metaName}.metadata as { repeat?: { everyMs?: number; cron?: string } })?.repeat ?? null, handler: ${importName} as (job: unknown, ctx: unknown) => Promise<void> }`
     )
   }
   return workers

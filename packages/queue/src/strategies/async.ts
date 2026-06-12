@@ -5,11 +5,19 @@ import { getRedisUrl, parseRedisUrl } from '@open-mercato/shared/lib/redis/conne
 // while keeping bullmq as an optional peer dependency
 type ConnectionOptions = { host?: string; port?: number; password?: string; db?: number }
 
+type BullRepeatOptions = { every?: number; pattern?: string }
+
 interface BullQueueInterface<T> {
-  add: (name: string, data: T, opts?: { removeOnComplete?: boolean; removeOnFail?: number }) => Promise<{ id?: string }>
+  add: (
+    name: string,
+    data: T,
+    opts?: { removeOnComplete?: boolean; removeOnFail?: number; repeat?: BullRepeatOptions },
+  ) => Promise<{ id?: string }>
   obliterate: (opts?: { force?: boolean }) => Promise<void>
   close: () => Promise<void>
   getJobCounts: (...states: string[]) => Promise<Record<string, number>>
+  getRepeatableJobs?: () => Promise<Array<{ key: string; name: string }>>
+  removeRepeatableByKey?: (key: string) => Promise<boolean>
 }
 
 interface BullWorkerInterface {
@@ -164,6 +172,45 @@ export function createAsyncQueue<T = unknown>(
     return { processed: -1, failed: -1, lastJobId: undefined }
   }
 
+  async function schedule(
+    jobName: string,
+    options: { everyMs?: number; cron?: string },
+  ): Promise<void> {
+    if (!options.cron && !(options.everyMs && options.everyMs > 0)) {
+      throw new Error('schedule() requires either a positive everyMs or a cron pattern')
+    }
+    const queue = await getQueue()
+
+    // Remove any stale repeatable entry for this jobName so a changed
+    // interval/pattern across deploys does not leave a second scheduler behind.
+    try {
+      const existing = (await queue.getRepeatableJobs?.()) ?? []
+      for (const job of existing) {
+        if (job.name === jobName && queue.removeRepeatableByKey) {
+          await queue.removeRepeatableByKey(job.key)
+        }
+      }
+    } catch {
+      // BullMQ surface differences — best-effort cleanup, the add below still
+      // converges to a single scheduler per (name + repeat key).
+    }
+
+    const repeat: BullRepeatOptions = options.cron
+      ? { pattern: options.cron }
+      : { every: options.everyMs }
+    const jobData: QueuedJob<T> = {
+      id: crypto.randomUUID(),
+      payload: {} as T,
+      createdAt: new Date().toISOString(),
+    }
+    await queue.add(jobName, jobData, {
+      repeat,
+      removeOnComplete: true,
+      removeOnFail: 50,
+    })
+    console.log(`[queue:${name}] Scheduled repeatable "${jobName}" (${options.cron ?? `${options.everyMs}ms`})`)
+  }
+
   async function clear(): Promise<{ removed: number }> {
     const queue = await getQueue()
 
@@ -208,5 +255,6 @@ export function createAsyncQueue<T = unknown>(
     clear,
     close,
     getJobCounts,
+    schedule,
   }
 }

@@ -740,6 +740,7 @@ export async function run(argv = process.argv) {
             id: string
             queue: string
             concurrency: number
+            repeat?: { everyMs?: number; cron?: string } | null
             handler: (job: unknown, ctx: unknown) => Promise<void> | void
           }
           const allWorkers: WorkerEntry[] = []
@@ -778,6 +779,7 @@ export async function run(argv = process.argv) {
             const workerPromises = discoveredQueues.map(async (queue) => {
               const queueWorkers = allWorkers.filter((w) => w.queue === queue)
               const concurrency = concurrencyOverride ?? Math.max(...queueWorkers.map((w) => w.concurrency), 1)
+              const repeat = queueWorkers.find((w) => w.repeat)?.repeat ?? undefined
 
               console.log(`[worker] Starting "${queue}" with ${queueWorkers.length} handler(s), concurrency: ${concurrency}`)
 
@@ -786,6 +788,7 @@ export async function run(argv = process.argv) {
                 connection: { url: getRedisUrl('QUEUE') },
                 concurrency,
                 background: true,
+                repeat,
                 handler: async (job, ctx) => {
                   for (const worker of queueWorkers) {
                     await worker.handler(job, { ...ctx, resolve: container.resolve.bind(container) })
@@ -808,6 +811,7 @@ export async function run(argv = process.argv) {
               // Use discovered workers
               const container = await createRequestContainer()
               const concurrency = concurrencyOverride ?? Math.max(...queueWorkers.map((w) => w.concurrency), 1)
+              const repeat = queueWorkers.find((w) => w.repeat)?.repeat ?? undefined
 
               console.log(`[worker] Found ${queueWorkers.length} worker(s) for queue "${queueName}"`)
 
@@ -815,6 +819,7 @@ export async function run(argv = process.argv) {
                 queueName: queueName!,
                 connection: { url: getRedisUrl('QUEUE') },
                 concurrency,
+                repeat,
                 handler: async (job, ctx) => {
                   for (const worker of queueWorkers) {
                     await worker.handler(job, { ...ctx, resolve: container.resolve.bind(container) })
