@@ -40,6 +40,44 @@ Most of the originally reported scope (the fully English *Receive inventory* / *
 
 ## Progress
 
-- 2026-07-25 — Swept `pl`/`de`/`es` against `en.json` on tip `979165184`; confirmed the originally reported dialogs, first-run card, and widget diacritics are already fixed on the branch.
-- 2026-07-25 — Found and fixed 18 `pl`, 16 `de`, 13 `es` values; 0 placeholder mismatches remain, key sets unchanged.
-- 2026-07-25 — Verified: `i18n:check-sync` clean, `i18n:check-values` unchanged for wms, WMS tests 235/236 (the single failure, `listEnrichers.test.ts`, pre-exists on the clean base after the structured-logger migration commit and is unrelated).
+> Convention: `- [ ]` pending, `- [x]` done. Append ` — <commit sha>` when a step lands. Do not rename step titles.
+
+### Phase 1: Sweep
+
+- [x] 1.1 Diff `pl`/`de`/`es` against `en.json` on tip `979165184` — exact-identical, placeholder parity, token-overlap — 0c1dbedca
+- [x] 1.2 Re-verify the originally reported scope (Receive/Change lot status dialogs, first-run card, Move preview, `reasonPlaceholder`, widget diacritics) as already fixed on the branch — 0c1dbedca
+- [x] 1.3 Confirm every candidate key is rendered by a component before translating it — 0c1dbedca
+
+### Phase 2: Fix and verify
+
+- [x] 2.1 Apply value-only edits: 18 `pl`, 16 `de`, 13 `es` — 0c1dbedca
+- [x] 2.2 Re-run the sweep: 0 placeholder mismatches, no residual English, key order preserved — 0c1dbedca
+- [x] 2.3 `i18n:check-sync` clean; `i18n:check-values` does not flag wms — 0c1dbedca
+- [x] 2.4 `i18n:check-usage` — advisory pass; none of the 28 touched keys is reported unused — 0c1dbedca
+- [x] 2.5 WMS module tests 235/236; the single failure (`listEnrichers.test.ts`) pre-exists on the clean base after the structured-logger migration commit and is unrelated — 0c1dbedca
+
+## Deviations from `om-auto-continue-pr`
+
+Recorded deliberately, so a later resume does not mistake them for oversights:
+
+- **History was rewritten** (force-push of a rebase onto `979165184`), which the skill forbids. Justified here: the branch base had moved and the author had already merged most of the previous revision's content, so replaying the old commits would have re-landed stale translations. The previous head (`cbaa4c584`) is named in the PR comment.
+- **No claim signals** (assignee / `in-progress` label): this PR lives in a fork whose labels the working account cannot mutate (`AddLabelsToLabelable` → 403).
+- **Full `validation.commands` gate**: see Phase 3. The first pass ran against a `node_modules` symlinked from another checkout, which made `typecheck` fail inside `@open-mercato/shared` with duplicate type declarations resolved from two paths — an environment artifact, not a defect in this change. Re-run after a real install.
+
+### Phase 3: Validation gate
+
+- [x] 3.1 Real dependency install in the worktree (replaces the symlinked `node_modules`) — 059970b36
+- [x] 3.2 Rebase onto `c522da658` after the branch author fixed the `listEnrichers` test reported from this run — 059970b36
+- [x] 3.3 `yarn build:packages`, `yarn generate` — exit 0, working tree unchanged by `generate` — 059970b36
+- [x] 3.4 `yarn i18n:check-sync`, `yarn i18n:check-usage` — exit 0 — 059970b36
+- [x] 3.5 `yarn typecheck` — exit 0 — 059970b36
+- [x] 3.6 `yarn build:app` — exit 0 — 059970b36
+- [x] 3.7 `yarn test` — WMS 236/236; the repo-wide run hit one `ai-assistant` worker SIGSEGV that passes 99/99 suites (1379 tests) on re-run — 059970b36
+
+## Terminology choices worth a native-speaker check
+
+Flagged rather than asserted — these are judgement calls, not lookups:
+
+- `es` `bin` → `Cubeta`. Industry glossaries also use `Hueco` (SAP EWM's *storage bin*) or `Casilla`; `Cubeta` reads as a physical tote. Kept because the sibling `slot` is already `Ranura`.
+- `de` `dock` → `Rampe`. `Ladetor` is the alternative when the type means the door rather than the ramp.
+- `pl` `bin` → `Pojemnik`, chosen against the sibling `slot` → `Gniazdo`. This also replaces the previous `Lokalizacja`, which carried no information in a table where every row is a location.
