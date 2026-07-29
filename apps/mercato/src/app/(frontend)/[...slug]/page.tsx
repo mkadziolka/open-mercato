@@ -1,5 +1,6 @@
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
+import type { ReactNode } from 'react'
 import { findFrontendMatch } from '@open-mercato/shared/modules/registry'
 import { modules } from '@/.mercato/generated/modules.generated'
 import { getAuthFromCookies } from '@open-mercato/shared/lib/auth/server'
@@ -12,6 +13,20 @@ import type { Metadata } from 'next'
 import { resolveLocalizedTitleMetadata } from '@/lib/metadata'
 
 type FrontendParams = { params: Promise<{ slug: string[] }> }
+
+/**
+ * Invoke a module frontend page and surface a raw `Response` (e.g. 429 from
+ * gamification public-profile SSR rate limiting) as the catch-all HTTP result.
+ * JSX `<Component />` would otherwise nest the Response as a React child.
+ */
+async function renderFrontendPage(
+  Component: (props: { params: any }) => unknown,
+  pageParams: any,
+): Promise<ReactNode | Response> {
+  const result = await Component({ params: pageParams })
+  if (result instanceof Response) return result
+  return result as ReactNode
+}
 
 async function renderAccessDenied() {
   const { translate } = await resolveTranslations()
@@ -63,8 +78,7 @@ export default async function SiteCatchAll({ params }: FrontendParams) {
       const ok = hasAllFeatures(customerFeatures as string[], customerAuth.resolvedFeatures)
       if (!ok) return renderAccessDenied()
     }
-    const Component = match.route.Component
-    return <Component params={match.params} />
+    return renderFrontendPage(match.route.Component, match.params)
   }
 
   // Staff auth gate
@@ -85,6 +99,5 @@ export default async function SiteCatchAll({ params }: FrontendParams) {
       if (!ok) return renderAccessDenied()
     }
   }
-  const Component = match.route.Component
-  return <Component params={match.params} />
+  return renderFrontendPage(match.route.Component, match.params)
 }
