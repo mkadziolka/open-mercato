@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
-import type { ReactNode } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 import { findFrontendMatch } from '@open-mercato/shared/modules/registry'
 import { modules } from '@/.mercato/generated/modules.generated'
 import { getAuthFromCookies } from '@open-mercato/shared/lib/auth/server'
@@ -14,16 +14,32 @@ import { resolveLocalizedTitleMetadata } from '@/lib/metadata'
 
 type FrontendParams = { params: Promise<{ slug: string[] }> }
 
+const REACT_CLIENT_REFERENCE = Symbol.for('react.client.reference')
+
+function isClientReference(Component: unknown): boolean {
+  return (
+    (typeof Component === 'function' || (typeof Component === 'object' && Component !== null)) &&
+    (Component as { $$typeof?: symbol }).$$typeof === REACT_CLIENT_REFERENCE
+  )
+}
+
 /**
- * Invoke a module frontend page and surface a raw `Response` (e.g. 429 from
- * gamification public-profile SSR rate limiting) as the catch-all HTTP result.
- * JSX `<Component />` would otherwise nest the Response as a React child.
+ * Render a module frontend page. Client components must be rendered as JSX
+ * (calling them as functions throws). Server components may return a raw
+ * `Response` (e.g. 429 from gamification public-profile SSR rate limiting);
+ * those are invoked so the status can be surfaced instead of nesting Response
+ * as a React child.
  */
 async function renderFrontendPage(
-  Component: (props: { params: any }) => unknown,
+  Component: ComponentType<{ params: any }> | ((props: { params: any }) => unknown),
   pageParams: any,
 ): Promise<ReactNode | Response> {
-  const result = await Component({ params: pageParams })
+  if (isClientReference(Component)) {
+    const ClientComponent = Component as ComponentType<{ params: any }>
+    return <ClientComponent params={pageParams} />
+  }
+
+  const result = await (Component as (props: { params: any }) => unknown)({ params: pageParams })
   if (result instanceof Response) return result
   return result as ReactNode
 }
