@@ -81,6 +81,30 @@ export function createLocalQueue<T = unknown>(
     }
   }
 
+  /**
+   * Write via temp file + rename so readers never observe a torn JSON document.
+   * Concurrent `writeFileSync` with `O_TRUNC` can leave hybrid garbage such as
+   * `[]  { ... }` when two processes rewrite the same queue file.
+   */
+  function atomicWriteFileSync(filePath: string, content: string): void {
+    const dir = path.dirname(filePath)
+    const tmpPath = path.join(
+      dir,
+      `.${path.basename(filePath)}.${nodeProcess?.pid ?? '0'}.${crypto.randomUUID()}.tmp`
+    )
+    try {
+      fs.writeFileSync(tmpPath, content, 'utf8')
+      fs.renameSync(tmpPath, filePath)
+    } catch (error) {
+      try {
+        fs.unlinkSync(tmpPath)
+      } catch {
+        // ignore cleanup failures
+      }
+      throw error
+    }
+  }
+
   function readQueue(): StoredJob<T>[] {
     ensureDir()
     try {
@@ -98,7 +122,7 @@ export function createLocalQueue<T = unknown>(
 
   function writeQueue(jobs: StoredJob<T>[]): void {
     ensureDir()
-    fs.writeFileSync(queueFile, JSON.stringify(jobs, null, 2), 'utf8')
+    atomicWriteFileSync(queueFile, JSON.stringify(jobs, null, 2))
   }
 
   function readState(): LocalState {
@@ -113,7 +137,7 @@ export function createLocalQueue<T = unknown>(
 
   function writeState(state: LocalState): void {
     ensureDir()
-    fs.writeFileSync(stateFile, JSON.stringify(state, null, 2), 'utf8')
+    atomicWriteFileSync(stateFile, JSON.stringify(state, null, 2))
   }
 
   function generateId(): string {

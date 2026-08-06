@@ -204,6 +204,23 @@ describe('Queue - local strategy', () => {
     await queue.close()
   })
 
+  test('queue.json remains valid JSON after concurrent enqueues', async () => {
+    const queue = createQueue<{ value: number }>('atomic-queue', 'local')
+    const queuePath = path.join('.mercato', 'queue', 'atomic-queue', 'queue.json')
+
+    await Promise.all(
+      Array.from({ length: 40 }, (_, i) => queue.enqueue({ value: i }))
+    )
+
+    const raw = fs.readFileSync(queuePath, 'utf8')
+    expect(() => JSON.parse(raw)).not.toThrow()
+    const jobs = readJson(queuePath)
+    expect(jobs.length).toBeGreaterThan(0)
+    expect(jobs.length).toBeLessThanOrEqual(40)
+
+    await queue.close()
+  })
+
   test('job context contains correct information', async () => {
     const queue = createQueue<{ value: number }>('context-test', 'local')
     let capturedContext: any = null
