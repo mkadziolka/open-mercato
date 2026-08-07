@@ -78,22 +78,34 @@ async function compileAndImport(tsPath: string): Promise<Record<string, unknown>
       },
     }
 
-    // Use esbuild.build with bundling to handle JSON imports
-    await esbuild.build({
-      entryPoints: [tsPath],
-      outfile: jsPath,
-      bundle: true,
-      format: 'esm',
-      platform: 'node',
-      target: 'node18',
-      plugins: [aliasPlugin, externalNonJsonPlugin],
-      // Allow JSON imports
-      loader: { '.json': 'json' },
-    })
+    // Write to a temp file then rename so concurrent CLI processes
+    // (server + workers + scheduler) never import a half-written .mjs.
+    const tmpPath = `${jsPath}.${process.pid}.${Date.now()}.tmp.mjs`
+    try {
+      await esbuild.build({
+        entryPoints: [tsPath],
+        outfile: tmpPath,
+        bundle: true,
+        format: 'esm',
+        platform: 'node',
+        target: 'node18',
+        plugins: [aliasPlugin, externalNonJsonPlugin],
+        // Allow JSON imports
+        loader: { '.json': 'json' },
+      })
+      fs.renameSync(tmpPath, jsPath)
+    } catch (err) {
+      try {
+        if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath)
+      } catch {
+        // ignore cleanup errors
+      }
+      throw err
+    }
   }
 
-  // Import the compiled JavaScript
-  const fileUrl = pathToFileURL(jsPath).href
+  // Import the compiled JavaScript (cache-bust so a freshly renamed file is loaded)
+  const fileUrl = `${pathToFileURL(jsPath).href}?t=${fs.statSync(jsPath).mtimeMs}`
   return import(fileUrl)
 }
 
@@ -150,11 +162,19 @@ export async function loadBootstrapData(appRoot?: string): Promise<BootstrapData
     compileAndImport(path.join(generatedDir, 'search.generated.ts')).catch(() => ({ searchModuleConfigs: [] })),
   ])
 
+  const modules = (modulesModule.modules ?? modulesModule.default) as BootstrapData['modules']
+  if (!Array.isArray(modules)) {
+    throw new Error(
+      `Failed to load modules from modules.cli.generated: expected an array, got ${typeof modules}. ` +
+        'Try deleting .mercato/generated/*.mjs and re-running yarn generate.',
+    )
+  }
+
   return {
-    modules: modulesModule.modules as BootstrapData['modules'],
-    entities: entitiesModule.entities as BootstrapData['entities'],
-    diRegistrars: diModule.diRegistrars as BootstrapData['diRegistrars'],
-    entityIds: entityIdsModule.E as BootstrapData['entityIds'],
+    modules,
+    entities: (entitiesModule.entities ?? entitiesModule.default) as BootstrapData['entities'],
+    diRegistrars: (diModule.diRegistrars ?? diModule.default) as BootstrapData['diRegistrars'],
+    entityIds: (entityIdsModule.E ?? entityIdsModule.default) as BootstrapData['entityIds'],
     // Search configs are needed by workers for indexing
     searchModuleConfigs: (searchModule.searchModuleConfigs ?? []) as BootstrapData['searchModuleConfigs'],
     // Empty UI-related data - not needed for CLI
