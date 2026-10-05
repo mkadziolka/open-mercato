@@ -111,6 +111,8 @@ docker/opencode/opencode.jsonc
 
 # Local runtime mirror synced from gamification-engine/modules/gamification
 apps/mercato/src/modules/gamification/
+# Rank emblem SVGs copied by scripts/sync-gamification.mjs into the Next public folder
+apps/mercato/public/gamification/rank-emblems/
 
 # Bootstrap import working copy (canonical data lives at repo-root historical_data/)
 apps/mercato/historical_data/
